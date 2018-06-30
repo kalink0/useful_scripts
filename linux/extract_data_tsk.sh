@@ -4,6 +4,8 @@
 # MAIL:           kalinko@be-binary.de
 # CREATION DATE:  2018/06/30
 #
+# LICENSE:        CC0-1.0
+#
 # SOURCE:         https://github.com/kalink0/useful_scripts
 #
 # TITLE:          extract_data_tsk.sh
@@ -17,7 +19,7 @@
 #                 Duplicate file names will lead to overwrite the formlery
 #                 exported file with the same name.
 #
-# USAGE EXAMPLE:  ./extract_data_tsk.sh test.e01 output_dir \.jpg$ 2048         
+# USAGE EXAMPLE:  ./extract_data_tsk.sh test.e01 output_dir \.jpg$ 2048
 #
 #-------------------------------------------------------------------------------
 
