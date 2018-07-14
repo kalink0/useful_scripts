@@ -73,7 +73,7 @@ def create_csv_with_logins(dest, output_name):
 
 def get_current_time():
 	now = datetime.datetime.now()
-	return (now.strftime("%Y%m%d%H%M%S"))
+	return (now.strftime("%Y%m%d-%H%M%S"))
 
 if __name__ == "__main__":
 	# define and parse cli arguments
