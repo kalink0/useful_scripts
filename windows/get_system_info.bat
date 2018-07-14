@@ -1,25 +1,25 @@
 @echo off
 
-REM ------------------------------------------------------------------------------
-REM AUTHOR:         kalink0
-REM MAIL:           kalinko@be-binary.de
-REM CREATION DATE:  2018/07/14
-REM
-REM LICENSE:        CC0-1.0
-REM
-REM SOURCE:         https://github.com/kalink0/useful_scripts
-REM
-REM TITLE:          get_system_info.bat
-REM
-REM DESCRIPTION:    Script to get general information of a running MS Windows system.
-REM
-REM
-REM KNOWN RESTRICTIONS:
-REM                 The script should be run with admin privileges
-REM
-REM USAGE EXAMPLE:  ./get_system_info.bat > [output_filename]
-REM
-REM -------------------------------------------------------------------------------
+:: ------------------------------------------------------------------------------
+:: AUTHOR:         kalink0
+:: MAIL:           kalinko@be-binary.de
+:: CREATION DATE:  2018/07/14
+::
+:: LICENSE:        CC0-1.0
+::
+:: SOURCE:         https://github.com/kalink0/useful_scripts
+::
+:: TITLE:          get_system_info.bat
+::
+:: DESCRIPTION:    Script to get general information of a running MS Windows system.
+::
+::
+:: KNOWN RESTRICTIONS:
+::                 The script should be run with admin privileges
+::
+:: USAGE EXAMPLE:  ./get_system_info.bat > [output_filename]
+::
+:: -------------------------------------------------------------------------------
 
 echo ====== DATE AND TIME =====
 echo %date% %time%

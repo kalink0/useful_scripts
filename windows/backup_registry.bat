@@ -1,27 +1,27 @@
 @echo off
 
 
-REM ------------------------------------------------------------------------------
-REM AUTHOR:         kalink0
-REM MAIL:           kalinko@be-binary.de
-REM CREATION DATE:  2018/07/14
-REM
-REM LICENSE:        CC0-1.0
-REM
-REM SOURCE:         https://github.com/kalink0/useful_scripts
-REM
-REM TITLE:          backup_registry.bat
-REM
-REM DESCRIPTION:    Script to backup the MS registry hives from a running system.
-REM                 Resulting files will be stored in the directory from where you called the script
-REM
-REM
-REM KNOWN RESTRICTIONS:
-REM                 The script may be run with admin privileges
-REM
-REM USAGE EXAMPLE:  ./backup_registry.bat
-REM
-REM -------------------------------------------------------------------------------
+:: ------------------------------------------------------------------------------
+:: AUTHOR:         kalink0
+:: MAIL:           kalinko@be-binary.de
+:: CREATION DATE:  2018/07/14
+::
+:: LICENSE:        CC0-1.0
+::
+:: SOURCE:         https://github.com/kalink0/useful_scripts
+::
+:: TITLE:          backup_registry.bat
+::
+:: DESCRIPTION:    Script to backup the MS registry hives from a running system.
+::                 Resulting files will be stored in the directory from where you called the script
+::
+::
+:: KNOWN RESTRICTIONS:
+::                 The script may be run with admin privileges
+::
+:: USAGE EXAMPLE:  ./backup_registry.bat
+::
+:: -------------------------------------------------------------------------------
 
 echo Export HKLM
 reg export HKLM hklm.reg > nul
