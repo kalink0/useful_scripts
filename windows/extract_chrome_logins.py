@@ -79,7 +79,7 @@ if __name__ == "__main__":
 	# define and parse cli arguments
 	parser = argparse.ArgumentParser(description='Extract Login data from Chrome Browser.', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 	parser.add_argument("-d" ,"--dest", help="Destination folder of output file", default='.')
-	parser.add_argument("-o" ,"--output_name", help="File name of output file", default=os.environ['COMPUTERNAME'] + '_' + get_current_time() + '.csv')
+	parser.add_argument("-o" ,"--output_name", help="File name of output file", default="chrome_export_" + os.environ['COMPUTERNAME'] + '_' + get_current_time() + '.csv')
 	args = parser.parse_args()
 	# Set chrome path -> HOME\AppData\Local\Google\Chrome\User Data\Default
 	chrome_path = os.path.join(str(Path.home()), 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'Default')
