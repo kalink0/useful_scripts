@@ -13,15 +13,14 @@ setlocal enabledelayedexpansion
 ::
 :: TITLE:          triageTool.bat
 ::
-:: DESCRIPTION:    Script to backup the MS registry hives from a running system.
-::                 Resulting files will be stored in the directory from where you called the script.
+:: DESCRIPTION:    Triage Script to get relevant infos of eunning system and check for encryption and passwords.
 ::				   Displayed language is German.	
 ::
 ::
 :: KNOWN RESTRICTIONS:
 ::                 The script uses executables from NirSoft to get and store system information.
 ::
-:: USAGE EXAMPLE:  ./backup_registry.bat
+:: USAGE EXAMPLE:  ./triageTool.bat
 ::
 :: -------------------------------------------------------------------------------
 
