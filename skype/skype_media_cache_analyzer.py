@@ -22,7 +22,7 @@
 #                You don't get all sent media files.
 #                This scripts needs more double checking of the results!
 #
-# USAGE EXAMPLE:  python extract_chrome_logins.py
+# USAGE EXAMPLE:  python skype_media_cache_analyzer.py
 #
 # -------------------------------------------------------------------------------
 
