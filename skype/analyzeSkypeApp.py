@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 # ------------------------------------------------------------------------------
 # AUTHOR:         kalink0
 # MAIL:           kalinko@be-binary.de
@@ -19,8 +18,10 @@
 #				 if the file there was sent or received via Skype.
 #
 # KNOWN RESTRICTIONS:
-#                Currently only Tested with SkypeApp Version 14.40.70.0 on Windows 10.
-#				  
+#                Currently only Tested with SkypeApp Version 8.40 on Windows 10.
+#				 It is known that this script does not work with SKype App
+#                version 8.48 and higher. THe version between 8.40 and 8.48
+#                were not tested yet.
 #
 # USAGE EXAMPLE:  python analyzeSkypeApp.py
 #
