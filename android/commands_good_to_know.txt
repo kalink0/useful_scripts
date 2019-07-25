@@ -1,0 +1,23 @@
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0
+# MAIL:           kalinko@be-binary.de
+# CREATION DATE:  2019/07/25
+#
+# LICENSE:        CC0-1.0
+#
+# SOURCE:         https://github.com/kalink0/useful_scripts
+#
+# TITLE:          commands_good_to_know
+#
+# DESCRIPTION:    Just a collection with useful commands
+#
+#
+# KNOWN RESTRICTIONS:
+#                 
+#
+# USAGE EXAMPLE:  
+#
+# -------------------------------------------------------------------------------
+
+# Adb pull from device with su installed
+adb shell su -c dd if=[PATH_TO_DISK] > TARGET_FILE_NAME
