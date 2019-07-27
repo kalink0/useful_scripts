@@ -10,14 +10,14 @@
  * TITLE:          antox_contacts.sql
  *
  * DESCRIPTION:    Script to parse contacts out of Antox Messenger database.
- *								 Location 			- /data/data/chat.tox.antox/databases
- *								 Database name 	- [antox_username].db
+ *			Location	- /data/data/chat.tox.antox/databases
+ *			Database name 	- [antox_username].db
  *
  *
  * KNOWN RESTRICTIONS:
  *
  *
- * USAGE EXAMPLE:  Execute with e.g. SQlite Browser or SQlite CLI on the sqlite file IMODb2_1.sqlite
+ * USAGE EXAMPLE:  Execute with e.g. SQlite Browser or SQlite CLI on the sqlite database
  *
  */
 
