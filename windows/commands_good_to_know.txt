@@ -1,0 +1,26 @@
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0
+# MAIL:           kalinko@be-binary.de
+# CREATION DATE:  2019/07/25
+#
+# LICENSE:        CC0-1.0
+#
+# SOURCE:         https://github.com/kalink0/useful_scripts/windows
+#
+# TITLE:          commands_good_to_know
+#
+# DESCRIPTION:    Just a collection with useful commands for windows
+#
+#
+# KNOWN RESTRICTIONS:
+#                 
+#
+# USAGE EXAMPLE:  
+#
+# -------------------------------------------------------------------------------
+
+# Allow power shell script execution in the running process
+Set-ExecutionPolicy  -Scope Process -ExecutionPolicy Unrestricted
+
+# Allow apps running in elevated mode to use mapped network shares
+reg add "HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v "EnableLinkedConnections" /t REG_DWORD /d 0x00000001 /f

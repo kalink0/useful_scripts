@@ -5,11 +5,11 @@
 #
 # LICENSE:        CC0-1.0
 #
-# SOURCE:         https://github.com/kalink0/useful_scripts
+# SOURCE:         https://github.com/kalink0/useful_scripts/android
 #
 # TITLE:          commands_good_to_know
 #
-# DESCRIPTION:    Just a collection with useful commands
+# DESCRIPTION:    Just a collection with useful commands for android
 #
 #
 # KNOWN RESTRICTIONS:
