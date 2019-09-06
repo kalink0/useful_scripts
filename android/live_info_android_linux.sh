@@ -11,22 +11,180 @@
 # TITLE:          live_info_android_linux.sh
 #
 # DESCRIPTION:    Script to get live system information from Android system
-#				  via ADB
+#				          via ADB
 #
 #
 # KNOWN RESTRICTIONS:
-#                 Only usable with ADB connection to Android phone and on a 
-#                 Nix system
-#				  When starting the script the adb connection must already been
-#				  trusted.
+#                 Only usable with ADB connection to Android phone and on a
+#                 Linux/Unix system
+#				          When starting the script the adb connection must already been
+#				          trusted.
+#
 #
 # USAGE EXAMPLE:  Execute Script on your system with attached Android phone.
-#				  
+#                 The script will ask for a target directory and a device id.
+#                 The device ID will be the prefix of the created files.
 #
 #-------------------------------------------------------------------------------
 
+## Ask for dirctory name and Device name/id
+read -p 'Destination directory: ' DEST_DIR
+read -p 'Device ID: ' DEVICE_ID
 
-# Get current system date and time
-DATE_NOW = $(date +"%Y-%m-%d %H:%M:%S %z")
+mkdir $DEST_DIR
+
+# Get current date and time of system and device
+DATE_SYSTEM_NOW=$(date +"%Y-%m-%d %H:%M:%S %z")
+DATE_DEVICE_NOW=$(adb shell "date +'%Y-%m-%d %H:%M:%S %z'")
+
+# logcat complete
+echo "1. GETTING LOGS FROM DEVICE VIA LOGCAT"
+adb shell logcat -d -b all > $DEST_DIR/$DEVICE_ID\_logcat.log
+adb shell logcat -S -b all > $DEST_DIR/$DEVICE_ID\_logcat_top.txt
+# dumpsys complete
+echo "2. CREATING SYSTEM DUMP"
+adb shell dumpsys > $DEST_DIR/$DEVICE_ID\_dumpsys_complete
+# dumpsys specific - to get more specific and faster view on some parts
+adb shell dumpsys activity > $DEST_DIR/$DEVICE_ID\_dumpsys_activity
+adb shell dumpsys account > $DEST_DIR/$DEVICE_ID\_dumpsys_account
+adb shell dumpsys wifi > $DEST_DIR/$DEVICE_ID\_dumpsys_wifi
+adb shell dumpsys dbinfo > $DEST_DIR/$DEVICE_ID\_dumpsys_dbinfo
+adb shell dumpsys usagestats > $DEST_DIR/$DEVICE_ID\_dumpsys_usagestats
+adb shell dumpsys procstats full-details > $DEST_DIR/$DEVICE_ID\_dumpsys_procstats
+
+# getprop complete
+echo "3. STORING DEVICE PROPERTIES"
+adb shell getprop > $DEST_DIR/$DEVICE_ID\_properties
+
+# installed packages
+echo "4. GETTING INFO ABOUT INSTALLED PACKAGES"
+## system enabled
+echo "==== ENABLED SYSTEM PACKAGES ====" > $DEST_DIR/$DEVICE_ID\_packages.lst
+adb shell pm list packages -s -e >> $DEST_DIR/$DEVICE_ID\_packages.lst
+## system disabled
+echo "" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+echo "==== DISABLED SYSTEM PACKAGES ====" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+adb shell pm list packages -s -d >> $DEST_DIR/$DEVICE_ID\_packages.lst
+## non-system enabled
+echo "" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+echo "==== ENABLED 3RD-PARTY PACKAGES ====" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+adb shell pm list packages -3 -e >> $DEST_DIR/$DEVICE_ID\_packages.lst
+## non-system disabled
+echo "" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+echo "==== DISABLED 3RD-PARTY PACKAGES ====" >> $DEST_DIR/$DEVICE_ID\_packages.lst
+adb shell pm list packages -3 -d >> $DEST_DIR/$DEVICE_ID\_packages.lst
+
+# System settings
+echo "5. SAVING SYSTEM SETTINGS"
+adb shell settings list global > $DEST_DIR/$DEVICE_ID\_settings_global
+adb shell settings list system > $DEST_DIR/$DEVICE_ID\_settings_system
+adb shell settings list secure > $DEST_DIR/$DEVICE_ID\_settings_secure
+
+echo "6. GETTING STORAGE INFORMATION"
+# Partitions (Does work on Android 7, does not work on Android 9)
+adb shell cat /proc/partitions > $DEST_DIR/$DEVICE_ID\_storage
+# Mounted partitions including there mountpoints and current utilization
+adb shell df -h >> $DEST_DIR/$DEVICE_ID\_storage
 
 
+
+echo "7. GETTING DEVICE INFORMATION AND CREATING DEVICE SUMMARY"
+# rooted or not
+if [[ $(adb shell id) == *"root"* ]] || [[ $(adb shell su -c id) == *"root"* ]];then
+	ROOTED="TRUE"
+else
+  ROOTED="FALSE"
+fi
+
+# Current SIM Card infos (TODO: Handle more than one SIM)
+# Doesn'T work really well, need better parsing because the values are not always
+# at the same place
+#PHONE_NUMBER=$(adb shell service call iphonesubinfo 13 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
+#ICCID=$(adb shell service call iphonesubinfo 11 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
+
+# NAME and MAC Bluetooth
+MAC_BT=$(adb shell settings get secure bluetooth_address)
+NAME_BT=$(adb shell settings get secure bluetooth_name)
+# MAC WIFI - Works on Android Moto g6 - needs more testing
+WIFI_MAC=$(adb shell getprop ro.boot.wifimacaddr)
+
+# IMEI
+IMEI1=$(adb shell service call iphonesubinfo 1 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
+IMEI2=$(adb shell service call iphonesubinfo 3 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
+# TODO: Check if IMEI1 and IMEI2 are different. If not, there is only one IMEI
+if [ $IMEI1 == $IMEI2 ]; then
+  IMEI2=""
+fi
+
+# Serial Number
+# TODO: Not tested on enoguh devices. More testing necessary
+SERIAL_SAM=$(adb shell getprop ril.serialnumber) # For Samsung
+SERIAL_MOTO=$(adb shell getprop ro.vendor.boot.serialno) # For Motorola
+if [[ -z $SERIAL_SAM ]]; then
+  SERIAL=$SERIAL_MOTO
+else
+  SERIAL=$SERIAL_SAM
+fi
+
+# ENcrypted or not encrypted? And Type
+CRYPTO_STATE=$(adb shell getprop ro.crypto.state)
+CRYPTO_TYPE=$(adb shell getprop ro.crypto.type)
+
+# Chipset/Hardware
+HARDWARE=$(adb shell getprop ro.boot.hardware)
+PLATFORM=$(adb shell getprop ro.board.platform)
+
+# Model and Manfacturer
+MANUFACTURER=$(adb shell getprop ro.product.manufacturer)
+MODEL=$(adb shell getprop ro.product.model)
+NAME=$(adb shell getprop ro.product.name)
+
+# CSC version (Only Samsung)
+CSC_CODE=$(adb shell getprop ro.csc.sales_code)
+# Android Version
+ANDROID_VERSION=$(adb shell getprop ro.build.version.release)
+# Buildnumber
+BUILDNUMBER=$(adb shell getprop ro.build.display.id)
+# Patchlevel
+PATCHLEVEL=$(adb shell getprop ro.build.version.security_patch)
+
+# And now we print out a summary and additionaly write the summary into a file
+SUM_FILE=$DEVICE_ID\_summary.txt
+
+echo "============================" | tee $DEST_DIR/$SUM_FILE
+echo "====== Device Summary ======" | tee $DEST_DIR/$SUM_FILE
+echo "============================" | tee $DEST_DIR/$SUM_FILE
+
+echo "" | tee $DEST_DIR/$SUM_FILE
+echo "Time of Android:   $DATE_DEVICE_NOW" | tee $DEST_DIR/$SUM_FILE
+echo "Time of Machine:   $DATE_SYSTEM_NOW" | tee $DEST_DIR/$SUM_FILE
+
+echo "" | tee $DEST_DIR/$SUM_FILE
+echo "Manufacturer:     $MANUFACTURER" | tee $DEST_DIR/$SUM_FILE
+echo "Model:            $MODEL" | tee $DEST_DIR/$SUM_FILE
+echo "Name:             $NAME" | tee $DEST_DIR/$SUM_FILE
+echo "Rooted?:          $ROOTED" | tee $DEST_DIR/$SUM_FILE
+echo "Encrypted?:       $CRYPTO_STATE" | tee $DEST_DIR/$SUM_FILE
+
+echo "" | tee $DEST_DIR/$SUM_FILE
+echo "=== SOFTWARE INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
+echo "Android Version:  $ANDROID_VERSION" | tee $DEST_DIR/$SUM_FILE
+echo "Build Number:     $BUILDNUMBER" | tee $DEST_DIR/$SUM_FILE
+echo "Patchlevel:       $PATCHLEVEL" | tee $DEST_DIR/$SUM_FILE
+echo "CSC-Code:         $CSC_CODE" | tee $DEST_DIR/$SUM_FILE
+
+echo "" | tee $DEST_DIR/$SUM_FILE
+echo "=== HARDWARE INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
+echo "Chipset:          $HARDWARE" | tee $DEST_DIR/$SUM_FILE
+echo "Platform:         $PLATFORM" | tee $DEST_DIR/$SUM_FILE
+echo "IMEI 1:           $IMEI1" | tee $DEST_DIR/$SUM_FILE
+echo "IMEI 2:           $IMEI2" | tee $DEST_DIR/$SUM_FILE
+echo "Serial number:    $SERIAL" | tee $DEST_DIR/$SUM_FILE
+echo "WIFI MAC:         $WIFI_MAC" | tee $DEST_DIR/$SUM_FILE
+echo "Bluetooth MAC:    $MAC_BT" | tee $DEST_DIR/$SUM_FILE
+echo "Bluetooth Name:   $NAME_BT" | tee $DEST_DIR/$SUM_FILE
+
+#echo "" | tee $DEST_DIR/$SUM_FILE
+#echo "=== SIM CARD INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
+#echo "Phone number:     $PHONE_NUMBER" | tee $DEST_DIR/$SUM_FILE
+#echo "ICCID:            $ICCID" | tee $DEST_DIR/$SUM_FILE
