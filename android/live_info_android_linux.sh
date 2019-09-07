@@ -17,8 +17,8 @@
 # KNOWN RESTRICTIONS:
 #                 Only usable with ADB connection to Android phone and on a
 #                 Linux/Unix system
-#				          When starting the script the adb connection must already been
-#				          trusted.
+#				  When starting the script the adb connection must already been
+#				  trusted.
 #
 #
 # USAGE EXAMPLE:  Execute Script on your system with attached Android phone.
@@ -111,7 +111,6 @@ WIFI_MAC=$(adb shell getprop ro.boot.wifimacaddr)
 # IMEI
 IMEI1=$(adb shell service call iphonesubinfo 1 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
 IMEI2=$(adb shell service call iphonesubinfo 3 | awk -F "'" '{print $2}' | sed '1 d'| tr -d '\n' | tr -d '.' | tr -d ' ')
-# TODO: Check if IMEI1 and IMEI2 are different. If not, there is only one IMEI
 if [ $IMEI1 == $IMEI2 ]; then
   IMEI2=""
 fi
@@ -152,39 +151,39 @@ PATCHLEVEL=$(adb shell getprop ro.build.version.security_patch)
 SUM_FILE=$DEVICE_ID\_summary.txt
 
 echo "============================" | tee $DEST_DIR/$SUM_FILE
-echo "====== Device Summary ======" | tee $DEST_DIR/$SUM_FILE
-echo "============================" | tee $DEST_DIR/$SUM_FILE
+echo "====== Device Summary ======" | tee -a $DEST_DIR/$SUM_FILE
+echo "============================" | tee -a $DEST_DIR/$SUM_FILE
 
-echo "" | tee $DEST_DIR/$SUM_FILE
-echo "Time of Android:   $DATE_DEVICE_NOW" | tee $DEST_DIR/$SUM_FILE
-echo "Time of Machine:   $DATE_SYSTEM_NOW" | tee $DEST_DIR/$SUM_FILE
+echo "" | tee -a $DEST_DIR/$SUM_FILE
+echo "Time of Android:   $DATE_DEVICE_NOW" | tee -a $DEST_DIR/$SUM_FILE
+echo "Time of Machine:   $DATE_SYSTEM_NOW" | tee -a $DEST_DIR/$SUM_FILE
 
-echo "" | tee $DEST_DIR/$SUM_FILE
-echo "Manufacturer:     $MANUFACTURER" | tee $DEST_DIR/$SUM_FILE
-echo "Model:            $MODEL" | tee $DEST_DIR/$SUM_FILE
-echo "Name:             $NAME" | tee $DEST_DIR/$SUM_FILE
-echo "Rooted?:          $ROOTED" | tee $DEST_DIR/$SUM_FILE
-echo "Encrypted?:       $CRYPTO_STATE" | tee $DEST_DIR/$SUM_FILE
+echo "" | tee -a $DEST_DIR/$SUM_FILE
+echo "Manufacturer:     $MANUFACTURER" | tee -a $DEST_DIR/$SUM_FILE
+echo "Model:            $MODEL" | tee -a $DEST_DIR/$SUM_FILE
+echo "Name:             $NAME" | tee -a $DEST_DIR/$SUM_FILE
+echo "Rooted?:          $ROOTED" | tee -a $DEST_DIR/$SUM_FILE
+echo "Encrypted?:       $CRYPTO_STATE" | tee -a $DEST_DIR/$SUM_FILE
 
-echo "" | tee $DEST_DIR/$SUM_FILE
-echo "=== SOFTWARE INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
-echo "Android Version:  $ANDROID_VERSION" | tee $DEST_DIR/$SUM_FILE
-echo "Build Number:     $BUILDNUMBER" | tee $DEST_DIR/$SUM_FILE
-echo "Patchlevel:       $PATCHLEVEL" | tee $DEST_DIR/$SUM_FILE
-echo "CSC-Code:         $CSC_CODE" | tee $DEST_DIR/$SUM_FILE
+echo "" | tee -a $DEST_DIR/$SUM_FILE
+echo "=== SOFTWARE INFORMATION ===" | tee -a $DEST_DIR/$SUM_FILE
+echo "Android Version:  $ANDROID_VERSION" | tee -a $DEST_DIR/$SUM_FILE
+echo "Build Number:     $BUILDNUMBER" | tee -a $DEST_DIR/$SUM_FILE
+echo "Patchlevel:       $PATCHLEVEL" | tee -a $DEST_DIR/$SUM_FILE
+echo "CSC-Code:         $CSC_CODE" | tee -a $DEST_DIR/$SUM_FILE
 
-echo "" | tee $DEST_DIR/$SUM_FILE
-echo "=== HARDWARE INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
-echo "Chipset:          $HARDWARE" | tee $DEST_DIR/$SUM_FILE
-echo "Platform:         $PLATFORM" | tee $DEST_DIR/$SUM_FILE
-echo "IMEI 1:           $IMEI1" | tee $DEST_DIR/$SUM_FILE
-echo "IMEI 2:           $IMEI2" | tee $DEST_DIR/$SUM_FILE
-echo "Serial number:    $SERIAL" | tee $DEST_DIR/$SUM_FILE
-echo "WIFI MAC:         $WIFI_MAC" | tee $DEST_DIR/$SUM_FILE
-echo "Bluetooth MAC:    $MAC_BT" | tee $DEST_DIR/$SUM_FILE
-echo "Bluetooth Name:   $NAME_BT" | tee $DEST_DIR/$SUM_FILE
+echo "" | tee -a $DEST_DIR/$SUM_FILE
+echo "=== HARDWARE INFORMATION ===" | tee -a $DEST_DIR/$SUM_FILE
+echo "Chipset:          $HARDWARE" | tee -a $DEST_DIR/$SUM_FILE
+echo "Platform:         $PLATFORM" | tee -a $DEST_DIR/$SUM_FILE
+echo "IMEI 1:           $IMEI1" | tee -a $DEST_DIR/$SUM_FILE
+echo "IMEI 2:           $IMEI2" | tee -a $DEST_DIR/$SUM_FILE
+echo "Serial number:    $SERIAL" | tee -a $DEST_DIR/$SUM_FILE
+echo "WIFI MAC:         $WIFI_MAC" | tee -a $DEST_DIR/$SUM_FILE
+echo "Bluetooth MAC:    $MAC_BT" | tee -a $DEST_DIR/$SUM_FILE
+echo "Bluetooth Name:   $NAME_BT" | tee -a $DEST_DIR/$SUM_FILE
 
-#echo "" | tee $DEST_DIR/$SUM_FILE
-#echo "=== SIM CARD INFORMATION ===" | tee $DEST_DIR/$SUM_FILE
-#echo "Phone number:     $PHONE_NUMBER" | tee $DEST_DIR/$SUM_FILE
-#echo "ICCID:            $ICCID" | tee $DEST_DIR/$SUM_FILE
+#echo "" | tee -a $DEST_DIR/$SUM_FILE
+#echo "=== SIM CARD INFORMATION ===" | tee -a $DEST_DIR/$SUM_FILE
+#echo "Phone number:     $PHONE_NUMBER" | tee -a $DEST_DIR/$SUM_FILE
+#echo "ICCID:            $ICCID" | tee -a $DEST_DIR/$SUM_FILE
