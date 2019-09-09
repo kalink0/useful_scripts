@@ -4,6 +4,8 @@
 # MAIL:           kalinko@be-binary.de
 # CREATION DATE:  2019/09/06
 #
+# Last Modified:  2019/09/09
+#
 # LICENSE:        CC0-1.0
 #
 # SOURCE:         https://github.com/kalink0/useful_scripts/android
