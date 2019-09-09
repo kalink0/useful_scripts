@@ -15,10 +15,12 @@
 #
 #
 # KNOWN RESTRICTIONS:
-#                 Only usable with ADB connection to Android phone and on a
-#                 Linux/Unix system
-#				  When starting the script the adb connection must already been
-#				  trusted.
+#                 - Only usable with ADB connection to Android phone and on a
+#                   Windows system
+#				  - When starting the script the adb connection must already been
+#				    trusted.
+#				  - Logcat command needs to be run twice beacuse the option "-b all"
+#				    Is not usable on older Versions of Android
 #
 #
 # USAGE EXAMPLE:  Execute Script on your system with attached Android phone.
@@ -39,7 +41,10 @@ DATE_DEVICE_NOW=$(adb shell "date +'%Y-%m-%d %H:%M:%S %z'")
 
 # logcat complete
 echo "1. GETTING LOGS FROM DEVICE VIA LOGCAT"
+# TODO: Make logcat dependent on the Android Version or the output of it
+# Because the next line doesn't run on older Androids
 adb shell logcat -d -b all > $DEST_DIR/$DEVICE_ID\_logcat.log
+adb shell logcat -d > $DEST_DIR/$DEVICE_ID\_logcat.log
 adb shell logcat -S -b all > $DEST_DIR/$DEVICE_ID\_logcat_top.txt
 # dumpsys complete
 echo "2. CREATING SYSTEM DUMP"
