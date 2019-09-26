@@ -5,7 +5,7 @@
  *
  * LICENSE:        CC0-1.0
  *
- * SOURCE:         https://github.com/kalink0/useful_scripts/iOS/Antox
+ * SOURCE:         https://github.com/kalink0/useful_scripts/Android/Antox
  *
  * TITLE:          antox_chat.sql
  *

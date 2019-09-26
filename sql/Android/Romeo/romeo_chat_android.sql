@@ -5,7 +5,7 @@
  *
  * LICENSE:        CC0-1.0
  *
- * SOURCE:         https://github.com/kalink0/useful_scripts/iOS/Romeo
+ * SOURCE:         https://github.com/kalink0/useful_scripts/Android/Romeo
  *
  * TITLE:         romeo_chat_android.sql
  *
