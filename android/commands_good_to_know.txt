@@ -21,3 +21,6 @@
 
 # Adb pull from device with su installed
 adb shell su -c dd if=[PATH_TO_DISK] > TARGET_FILE_NAME
+
+# Create adb backup incl. key values
+adb backup -all -shared -system -keyvalue -f file.adb
