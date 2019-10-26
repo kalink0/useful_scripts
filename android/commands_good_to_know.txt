@@ -13,14 +13,20 @@
 #
 #
 # KNOWN RESTRICTIONS:
-#                 
 #
-# USAGE EXAMPLE:  
+#
+# USAGE EXAMPLE:
 #
 # -------------------------------------------------------------------------------
 
-# Adb pull from device with su installed
+# Adb pull disk from device with su installed
 adb shell su -c dd if=[PATH_TO_DISK] > TARGET_FILE_NAME
+
+# Adb pull files/folders from device with su installed
+adb shell su -c tar -cf /data/local/tmp/[NAME].tar [PATH_OR_FILE_TO_PULL]
+    && adb shell su -c chown shell:shell /data/local/tmp/[NAME]].tar
+    && adb pull /data/local/tmp/[NAME].tar
+    && adb shell rm -f /data/local/tmp/[NAME].tar
 
 # Create adb backup incl. key values
 adb backup -all -shared -system -keyvalue -f file.adb

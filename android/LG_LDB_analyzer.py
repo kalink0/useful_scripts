@@ -1,5 +1,5 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 # ------------------------------------------------------------------------------
 # AUTHOR:         kalink0
 # MAIL:           kalinko@be-binary.de
@@ -7,7 +7,7 @@
 #
 # LICENSE:        CC0-1.0
 #
-# SOURCE:         https://github.com/kalink0/useful_scripts
+# SOURCE:         https://github.com/kalink0/useful_scripts/android
 #
 # TITLE:         LG_LDB_analyzer
 #
