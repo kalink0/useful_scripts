@@ -18,6 +18,7 @@
 #               Device must be connected with adb enabled and already trusted
 #               Currenty only one folder/filder per run can be extracted.
 #               Batch mode will be implemented next
+#               There needs to be free storage on the device, /data/local/tmp is used.
 #               CAUTION: Existing files will be overwritten!
 #
 # USAGE EXAMPLE:
