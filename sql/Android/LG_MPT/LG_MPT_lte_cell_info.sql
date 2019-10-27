@@ -7,9 +7,9 @@
  *
  * SOURCE:         https://github.com/kalink0/useful_scripts/Android/LG_MPT
  *
- * TITLE:          LG_MPT_gsm_cell_info.sql
+ * TITLE:          LG_MPT_lte_cell_info.sql
  *
- * DESCRIPTION:    Script to get GSM Cell info out of LG MPT logging database
+ * DESCRIPTION:    Script to get LTE Cell info out of LG MPT logging database
  *			Location 		- /mpt/
 			Database name 	- LDB_MainData.db
  *
@@ -20,11 +20,11 @@
  *
  */
 
-SELECT
-f001 AS "ID",
-DATETIME(f002/1000, 'unixepoch') AS "Timestamp (UTC)",
-f003 AS "Cell ID",
-f004 AS "LAC",
-f006 AS "MCC",
-f007 AS "MNC"
-FROM t312;
+ SELECT
+ f001 AS "ID",
+ DATETIME(f002/1000, 'unixepoch') AS "Timestamp (UTC)",
+ f006 AS "Cell ID",
+ f005 AS "LAC",
+ f003 AS "MCC",
+ f004 AS "MNC"
+ FROM t330;

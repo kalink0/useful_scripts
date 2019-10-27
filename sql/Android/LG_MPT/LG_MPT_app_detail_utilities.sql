@@ -7,9 +7,9 @@
  *
  * SOURCE:         https://github.com/kalink0/useful_scripts/Android/LG_MPT
  *
- * TITLE:          LG_MPT_gsm_cell_info.sql
+ * TITLE:          LG_MPT_gapp_detail_utilities.sql
  *
- * DESCRIPTION:    Script to get GSM Cell info out of LG MPT logging database
+ * DESCRIPTION:    Script to get App usage info for utilities out of LG MPT logging database
  *			Location 		- /mpt/
 			Database name 	- LDB_MainData.db
  *
@@ -23,8 +23,8 @@
 SELECT
 f001 AS "ID",
 DATETIME(f002/1000, 'unixepoch') AS "Timestamp (UTC)",
-f003 AS "Cell ID",
-f004 AS "LAC",
-f006 AS "MCC",
-f007 AS "MNC"
-FROM t312;
+f003 AS "App Path",
+f004 AS "App Name",
+f005 AS "Called Method",
+f007 AS "Parameter"
+FROM t433;
