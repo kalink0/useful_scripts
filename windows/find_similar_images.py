@@ -25,13 +25,23 @@ import argparse
 import os
 import dhash
 import PIL
+from wand.image import Image
 
 def calculate_dhashes (files):
 
-    image = PIL.Image.open('dhash-test.jpg')
-    row, col = dhash.dhash_row_col(image)
-    print(dhash.format_hex(row, col))
-    pass
+    dhashes = []
+    for i in files:
+        image = PIL.Image.open(i)
+        row, col = dhash.dhash_row_col(image)
+        print (i)
+        print(dhash.format_hex(row, col))
+
+def ccalculate_dhashes_2 (files):
+    for i in files:
+        with Image(filename=i) as image:
+            row, col = dhash.dhash_row_col(image)
+            print (i)
+            print(dhash.format_hex(row, col))
 
 def create_file_list (data_set):
     file_list = []
@@ -55,15 +65,18 @@ def create_abs_path(path):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Script tocalculate dhashes of images and find images with identical dhash"
+        description="Script to calculate dhashes of images and find images with identical dhash"
     )
 
     ap.add_argument("image")
     ap.add_argument("data_set")
     
     #args = ap.parse_args()
-    file_list = create_file_list ("/home/kalinko/Nextcloud/Work/Tests/DHash/testset/")
-    #calculate_dhashes()
+    #file_list = create_file_list ("/home/kalinko/Nextcloud/Work/Tests/DHash/testset/")
+    file_list = create_file_list ("D:\\Nextcloud\\Work\\Tests\\DHash\\testset\\")
+    calculate_dhashes(file_list)
+    ccalculate_dhashes_2(file_list)
+
 
 if __name__ == "__main__":
     main()
