@@ -9,14 +9,19 @@
 #
 # SOURCE:         https://github.com/kalink0/useful_scripts/windows
 #
-# TITLE:         TODO
+# TITLE:         create_word_list.py
 #
-# DESCRIPTION:   TODO
+# DESCRIPTION:   Script to help create a wordlist.
+#                Idea: You have known passwords and wnat to create similar ones.
+#                This script has modules one can run to build a more extended set
+#                of possible password   
 #
 # KNOWN RESTRICTIONS:
+#                 The destination file will be overwritten
 #
 #
-# USAGE EXAMPLE:  TODO
+# USAGE EXAMPLE:  
+#                 python create_word_list.py file_with_base_words destination
 #
 # -------------------------------------------------------------------------------
 
