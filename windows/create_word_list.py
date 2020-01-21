@@ -28,6 +28,7 @@
 import argparse
 import os
 import itertools
+import math
 
 def read_from_file(file):
     with open(file, 'r') as f:
@@ -52,8 +53,12 @@ def permutate_lower_upper_cases(words):
     return permutated_words
     
 
-def create_numbers():
-    pass
+def create_numbers(length):
+    numbers = []
+    for i in range(int(math.pow(10, length))):
+        numbers.append(format(i, '0'+str(length)+'d'))
+
+    return numbers
 
 def concat_strings(words):
     tmp_words = []
@@ -92,7 +97,6 @@ def main():
     base_words = read_from_file(create_abs_path(args.partial_words))
     base_words = permutate_lower_upper_cases(base_words)
     base_words = concat_strings(base_words)
-
 
     write_into_file(base_words, create_abs_path(args.destination))
 
