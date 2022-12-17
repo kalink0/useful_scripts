@@ -24,3 +24,6 @@ Set-ExecutionPolicy  -Scope Process -ExecutionPolicy Unrestricted
 
 # Allow apps running in elevated mode to use mapped network shares
 reg add "HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v "EnableLinkedConnections" /t REG_DWORD /d 0x00000001 /f
+
+# Search for specific Back-Ports for detection in Sysmon
+Get-WinEvent -Path <Path to Log> -FilterXPath '*/System/EventID=3 and */EventData/Data[@Name="DestinationPort"] and */EventData/Data=<Port>'
