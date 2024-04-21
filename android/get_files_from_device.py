@@ -30,8 +30,8 @@ import os
 import argparse
 
 def extract_data(data, dst):
-    os.system("adb shell su -c tar -cf /data/local/tmp/output_temp.tar " + data)
-    os.system("adb shell su -c chown shell:shell /data/local/tmp/output_temp.tar")
+    os.system("adb shell tar -cf /data/local/tmp/output_temp.tar " + data)
+    os.system("adb shell chown shell:shell /data/local/tmp/output_temp.tar")
     os.system("adb pull /data/local/tmp/output_temp.tar " + dst)
     os.system("adb shell rm -f /data/local/tmp/output_temp.tar")
 
