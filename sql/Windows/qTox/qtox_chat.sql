@@ -9,9 +9,9 @@
  *
  * TITLE:          qtox_chat.sql
  *
- * DESCRIPTION:    Script to parse Chat data out of qTox Messenger database.
- *			Location 	- %APPDATA%\Roaming\tox\
-			Database name 	- [tox_username].db
+ * DESCRIPTION:    	Script to parse Chat data out of qTox Messenger database.
+ *					Location 	- %APPDATA%\Roaming\tox\
+					Database name 	- [tox_username].db
  *
  *
  * KNOWN RESTRICTIONS:

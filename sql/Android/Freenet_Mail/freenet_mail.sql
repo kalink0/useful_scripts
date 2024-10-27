@@ -9,14 +9,14 @@
  *
  * TITLE:          antox_chat.sql
  *
- * DESCRIPTION:    Script to parse Chat data out of Antox Messenger database.
- *			Location 	- /data/data/de.freenet.mail/databases/mail.db
-			Database name 	- main.db
+ * DESCRIPTION: 	Script to parse Mail data out of Freenet Mail app.
+ *					Location 	- /data/data/de.freenet.mail/databases/mail.db
+					Database name 	- main.db
  *
  *
  * KNOWN RESTRICTIONS:
  *					Currently the data in the column cc, bcc, from and to are JSON 
- *					objcts that are not decoded. Readable but not the final result
+ *					objects that are not decoded. Readable but not the final result
  *
  *
  * USAGE EXAMPLE:  Execute with e.g. SQlite Browser or SQlite CLI on the sqlite db

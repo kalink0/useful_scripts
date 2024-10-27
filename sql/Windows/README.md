@@ -1,3 +1,3 @@
 # Windows
 
-Folder with SQL-Script for Windows-Applications SQLite-Databases
+Folder with SQL-Scripts/Select-queries for Windows-Applications SQLite-Databases
