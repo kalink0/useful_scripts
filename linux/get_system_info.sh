@@ -10,8 +10,7 @@
 #
 # TITLE:          get_system_info.sh
 #
-# DESCRIPTION:    Script get general information of a running linux system. 
-#
+# DESCRIPTION:    This script is more like a collection of commands. It can be run on a live system but would use the executables on the machine, so be careful when using.
 #
 # KNOWN RESTRICTIONS:
 #                 The script should be run as super user
@@ -28,6 +27,8 @@ echo "====== CURRENT LOGGED IN USERS ====="
 w
 echo "====== EXISTING LOCAL USER ACCOUNTS ====="
 cut -d: -f1 /etc/passwd
+echo "====== LAST BOOTS AND LOGINS ====="
+last
 echo "====== KERNEL VERSION AND DISTRIBUTION INFO ====="
 uname -a
 cat /etc/issue
@@ -37,21 +38,23 @@ echo "====== HOSTNAME ====="
 hostname
 echo "====== NETWORK INFORMATION / INTERFACE ====="
 # TODO compatiblity with older version -> e.g. ifconfig
-ip addr
+ip a
 echo "====== NETWORK INFORMATION / ROUTING ====="
-route
+ip r
 echo "===== NETWORK INFORMATION / ARP ====="
-arp -a
+# formerly "arp -a" 
+# TODO compatiblity with older version 
+ip -s n
 echo "===== NETWORK INFORMATION / DNS CACHE ====="
-# TODO Control if nscd is running and installed, only than execute this command
-nscd -g
+journalctl -u systemd-resolved      
+journalctl -u dnsmasq   
 echo "===== NETWORK INFORMATION / ACTIVE SOCKETS ====="
-netstat -a
+ss -a
 echo "===== NETWORK INFORMATION / OPEN PORTS ====="
-netstat -an
+ss -an
 echo "===== CURRENT RUNNING PROCESSES ====="
 ps -aux
-echo "===== MOUNT POINTS ====="
+echo "===== MOUNTED DEVICES / MOUNT POINTS ====="
 mount
 echo "===== OPEN FILES ====="
 lsof
