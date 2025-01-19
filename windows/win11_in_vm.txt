@@ -1,0 +1,35 @@
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0
+# MAIL:           kalinko@be-binary.de
+# CREATION DATE:  2025-01-19
+#
+# LICENSE:        CC0-1.0
+#
+# SOURCE:         https://github.com/kalink0/useful_scripts/windows
+#
+# TITLE:          win11_in_vm
+#
+# DESCRIPTION:    Steps/settings to do install Win11 in a VM (e.g. Virtual Box)
+#
+#
+# KNOWN RESTRICTIONS:
+#                 
+#
+# USAGE EXAMPLE:  
+#
+# -------------------------------------------------------------------------------
+
+1. Acitvate EFI
+2. Change settings when installing
+    - when on step for partioning:
+    - Press "Shift + F10" (console should open)
+    - Enter "regedit"
+    - Navigate to "HKEY_LOCAL_MACHINE\SYSTEM\Setup
+    - Create new key under setup - name should not be important
+    - UNder the new key create three new values
+        - DWORD (32-bit) - Name: BypassTPMCheck - Value: 1
+        - DWORD (32-bit) - Name: BypassRAMCheck - Value: 1
+        - DWORD (32-bit) - Name: BypassSecureBootCheck - Value: 1
+    - Close the regedit
+    - Exit the console
+    - Start installing
