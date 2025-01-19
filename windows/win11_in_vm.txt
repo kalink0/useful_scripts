@@ -21,7 +21,7 @@
 
 1. Acitvate EFI
 2. Change settings when installing
-    - when on step with "install now" do the following:
+    - when on step for partioning:
     - Press "Shift + F10" (console should open)
     - Enter "regedit"
     - Navigate to "HKEY_LOCAL_MACHINE\SYSTEM\Setup
