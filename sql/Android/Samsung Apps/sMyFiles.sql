@@ -1,7 +1,7 @@
 -- App: Android Samsung My Files
 -- App Version: x
--- Creation Date: 2025-11-16
--- Last Modification Date: 2025-11-16
+-- Creation Date: 2026-01-04
+-- Last Modification Date: 2026-01-04
 -- Database Location: [...]\com.sec.android.app.myfiles\databases\
 -- Database Name: please see corresponding section for database name specific to SELECT statement
 -- Parse Samsung My Files App
