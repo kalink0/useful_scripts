@@ -40,3 +40,41 @@ oh.mOperationResult [Result],
 oh.mMemoryFullCapacity [Storage Capacity Info]
 FROM operation_history_data ohd
 JOIN operation_history oh ON oh._id = ohd.operation_id
+
+-- List Favorite Files
+-- Database Name: FileInfo.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Date Added],
+file_id [File ID],
+path [File Path],
+name [File Name],
+mime_type [File Type],
+size [File Size],
+is_trashed [Trashed?],
+is_hidden [Hidden?]
+FROM favorites
+
+-- List Last Search Terms
+-- Only the last ten are stored
+-- Database Name: FileInfo.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Date Searched],
+name [Search Term]
+FROM search_history
+
+-- List Recent Files
+-- Only stored for the last 30 days
+-- Database Name: FileInfo.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "recent_date"/1000, 'unixepoch') || ("recent_date"%1000) [Last Date],
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Modification Date],
+file_id [File ID],
+path [File Path],
+name [File Name],
+mime_type [File Type],
+package_name [App Context],
+is_download [Download?],
+is_hidden [Hidden?],
+is_trashed [Trashed?]
+
+FROM recent_files
