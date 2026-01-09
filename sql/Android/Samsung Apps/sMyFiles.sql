@@ -1,7 +1,7 @@
 -- App: Android Samsung My Files
 -- App Version: x
 -- Creation Date: 2026-01-04
--- Last Modification Date: 2026-01-04
+-- Last Modification Date: 2026-01-09
 -- Database Location: [...]\com.sec.android.app.myfiles\databases\
 -- Database Name: please see corresponding section for database name specific to SELECT statement
 -- Parse Samsung My Files App
@@ -76,5 +76,22 @@ package_name [App Context],
 is_download [Download?],
 is_hidden [Hidden?],
 is_trashed [Trashed?]
-
 FROM recent_files
+
+
+-- List Downloaded Files
+-- Database Name: FileInfo.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "date_added"/1000, 'unixepoch') || ("date_added"%1000) [Date Downloaded],
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Date Modified],
+file_id [File ID],
+path [File Path],
+name [File Name],
+mime_type [File Type],
+package_name [App Context],
+sender_name [Sender Name],
+sender_email [Sender EMail],
+sender_device_name [Sender Device Name],
+download_uri [Download URI],
+is_trashed [Trashed?]
+FROM download_history
