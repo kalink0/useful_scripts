@@ -95,3 +95,27 @@ sender_device_name [Sender Device Name],
 download_uri [Download URI],
 is_trashed [Trashed?]
 FROM download_history
+
+-- List Local Files List
+-- Database Name: FileInfo.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Date Modified],
+path [File Path],
+name [File Name],
+mime_type [File Type],
+size [File Size],
+is_hidden [Hidden?],
+is_trashed [Trashed?]
+FROM local_files
+
+-- List connected Cloud Accounts e.g. Google Drive / One Drive
+-- Database Name: Account.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "lastSyncTime"/1000, 'unixepoch') || ("lastSyncTime"%1000) [Last Sync Time],
+driveName [Drive Name],
+accountId [Account ID],
+totalCapacity [Account Capacity],
+usedCapacity [Used Account Capacity],
+signInStatus [Sign In Status],
+syncStatus [Sync Status]
+FROM account
