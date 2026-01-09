@@ -2,7 +2,7 @@
 -- App Version: x
 -- Creation Date: 2026-01-04
 -- Last Modification Date: 2026-01-09
--- Database Location: [...]\com.sec.android.app.myfiles\databases\
+-- Database Location: [...]/com.sec.android.app.myfiles/databases/
 -- Database Name: please see corresponding section for database name specific to SELECT statement
 -- Parse Samsung My Files App
 -- Author: Marco Neumann (kalink0)
@@ -119,3 +119,14 @@ usedCapacity [Used Account Capacity],
 signInStatus [Sign In Status],
 syncStatus [Sync Status]
 FROM account
+
+-- List Cached Files
+-- In Folder [...]/com.sec.android.app.myfiles/cache can be the cached file content stored - identifiable via _index at the beginning of the file name
+-- Only last  2048 cached entries
+-- Database Name: FileCache.db
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "latest"/1000, 'unixepoch') || ("latest"%1000) [Date Latest],
+strftime('%Y-%m-%d %H:%M:%S.', "date_modified"/1000, 'unixepoch') || ("date_modified"%1000) [Date First Cached],
+_index [Index],
+_data [Original File Path]
+FROM FileCache
