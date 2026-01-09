@@ -1,5 +1,5 @@
 -- App: Android Samsung My Files
--- App Version: x
+-- Tested App Version: 15.4.01.16
 -- Creation Date: 2026-01-04
 -- Last Modification Date: 2026-01-09
 -- Database Location: [...]/com.sec.android.app.myfiles/databases/
@@ -41,6 +41,7 @@ oh.mMemoryFullCapacity [Storage Capacity Info]
 FROM operation_history_data ohd
 JOIN operation_history oh ON oh._id = ohd.operation_id
 
+-- FILE INFORMATION
 -- List Favorite Files
 -- Database Name: FileInfo.db
 SELECT
@@ -108,6 +109,7 @@ is_hidden [Hidden?],
 is_trashed [Trashed?]
 FROM local_files
 
+-- ACCOUNT INFO
 -- List connected Cloud Accounts e.g. Google Drive / One Drive
 -- Database Name: Account.db
 SELECT
@@ -120,6 +122,7 @@ signInStatus [Sign In Status],
 syncStatus [Sync Status]
 FROM account
 
+-- FILE CACHE
 -- List Cached Files
 -- In Folder [...]/com.sec.android.app.myfiles/cache can be the cached file content stored - identifiable via _index at the beginning of the file name
 -- Only last  2048 cached entries
