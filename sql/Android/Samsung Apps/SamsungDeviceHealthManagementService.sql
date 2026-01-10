@@ -19,3 +19,19 @@ package_name [Package Name],
 uid [Package ID],
 net_usage [Network Usage]
 FROM NETSTAT
+
+-- List Hardware Temperature
+-- Data for about the last 5 days
+-- Temperature in Celsius but division by 10 required
+-- Existing Sensors and used sensors for value dependa on device
+-- Database Name: thermal_log
+SELECT
+strftime('%Y-%m-%d %H:%M:%S.', "timestamp"/1000, 'unixepoch') || ("timestamp"%1000) [Timestamp],
+skin_temp/10.0 [Chassis Temperature],
+ap_temp/10.0 [Processor Temperature],
+bat_temp/10.0 [Battery Temperature],
+usb_temp/10.0 [USB Temperature],
+chg_temp/10.0 [Charging IC Temperature],
+pa_temp/10.0 [Cellular Radio Temperature],
+wifi_temp/10.0 [WiFi Temperature]
+FROM TEMPERATURE
