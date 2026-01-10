@@ -12,9 +12,9 @@
 -- If Package Name == -5 -> Whole system data - not app specific
 -- Database Name: thermal_log
 SELECT
-id [ID],
 strftime('%Y-%m-%d %H:%M:%S.', "start_time"/1000, 'unixepoch') || ("start_time"%1000) [Start Time],
 strftime('%Y-%m-%d %H:%M:%S.', "end_time"/1000, 'unixepoch') || ("end_time"%1000) [End Time],
+id [ID],
 package_name [Package Name],
 uid [Package ID],
 net_usage [Network Usage]
