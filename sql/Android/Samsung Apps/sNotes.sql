@@ -1,10 +1,10 @@
--- App: Android Samsung Gallery 3D 
--- Tested App Version: 15.7.00.43
+-- App: Android Samsung Notes
+-- Tested App Version: 4.4.30.91
 -- Creation Date: 2026-01-11
 -- Last Modification Date: 2026-01-11
--- Database Location: [...]/com.sec.android.gallery3d/databases/
+-- Database Location: [...]/com.samsung.android.app.notes/databases/
 -- Database Name: please see corresponding section for database name specific to SELECT statement
--- Parse Samsung Gallery 3D App
+-- Parse Samsung Notes
 -- Author: Marco Neumann (kalink0)
 
 -- List All Notes
