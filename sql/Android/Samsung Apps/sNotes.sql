@@ -9,7 +9,7 @@
 
 -- List All Notes
 -- Including deleted/trashed Notes
--- For file path -> Docs and attachments are stored at least two times - in data/user/0/<app> and in data/data/<app>
+-- For file path -> Docs and attachments are stored at least two times - in data/user/0/<app> and in data/data/<app>. But in hte data/data path addtional the subfolder "mainlist" exists
 -- The Attachments are listed in one cell per row, CSV inside -> path,size,created_timestamp,isdeleted
 -- Database Name: sdoc.db
 SELECT
