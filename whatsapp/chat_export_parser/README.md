@@ -4,7 +4,7 @@ Parses Chat Export from WhatsApp - relys on the structure of this export.
 Generates the result as HTML report - with bubble view and media attachments.
 
 ## Tested with following version:
-2.26.2.72
+2.26.2.72, english language
 
 ## Supported Format:
 
@@ -35,3 +35,5 @@ Default of chat type is 1-to-1.
 3. The chat Name is read from the zip/folder name OR the txt name. Currently it splits by
 the word "with" - everything after it will be set as Chat name. This only work in english.
 If wiht is not found the full file name will be set as Chat/contact name.
+4. Also the time stamp is based on the english timestamp - there is more work to do 
+for other languages
