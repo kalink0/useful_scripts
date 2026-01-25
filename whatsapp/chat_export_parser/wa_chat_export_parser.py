@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# ------------------------------------------------------------------------------
-# AUTHOR:           kalink0 (kalinko@be-binary.de)
-# CREATION DATE:    2026-01-26
-# DESCRIPTION:
-#                   Script to parse WhatsApp Chat Export and create HTML Report with bubble view linked media
-#
-# USAGE EXAMPLES:
-#                   wa_chat_export_parser.py --input ./WhatsApp\ Chat\ with\ kalinko.zip --output output/
-#                   wa_chat_export_parser.py --input ./folder/WhatsApp\ Chat\ with\ kalinko.txt --output output/
-#                   wa_chat_export_parser.py --input ./folder --output output/
-#
-# -------------------------------------------------------------------------------
+#-*- coding: utf-8 -*-
+""" -------------------------------------------------------------------------------------
+ AUTHOR:           kalink0 (kalinko@be-binary.de)
+ CREATION DATE:    2026-01-26
+ DESCRIPTION:
+                   Script to parse WhatsApp Chat Export and create HTML Report 
+                   with bubble view linked media
+
+ USAGE EXAMPLES:
+                   wa_chat_export_parser.py 
+                        --input "./WhatsApp Chat with kalinko.zip" --output output/
+                   wa_chat_export_parser.py 
+                        --input ./folder/WhatsApp Chat with kalinko.txt" --output output/
+                   wa_chat_export_parser.py 
+                        --input ./folder --output output/
+
+ ----------------------------------------------------------------------------------------
+ """
 
 
 import re
