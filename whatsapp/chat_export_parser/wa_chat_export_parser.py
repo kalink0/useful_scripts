@@ -274,9 +274,9 @@ def sanitize_filename(name):
 
 def main():
     """
-    Here is the magic
+    Here it begins
     """
-    parser = argparse.ArgumentParser(description="WhatsApp chat parser with HTML export")
+    parser = argparse.ArgumentParser(description="WhatsApp Chat Export parser with HTML report")
     parser.add_argument("--input", help="Path to folder, zip, or TXT with WhatsApp export")
     parser.add_argument("--output", help="Output folder or file path")
     parser.add_argument("--user", help="User generating the report")
