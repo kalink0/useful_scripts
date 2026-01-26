@@ -37,3 +37,4 @@ the word "with" - everything after it will be set as Chat name. This only work i
 If wiht is not found the full file name will be set as Chat/contact name.
 4. Also the time stamp is based on the english timestamp - there is more work to do 
 for other languages
+5. ATM only ANDROID exports are supported cause on iOS the structure is different.
