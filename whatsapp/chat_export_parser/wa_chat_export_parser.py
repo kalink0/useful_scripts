@@ -29,6 +29,8 @@ import shutil
 import zipfile
 import tempfile
 import sys
+from typing import List, Dict, Optional
+import unicodedata
 
 def parse_messages_from_file(file_path):
     """
@@ -115,6 +117,27 @@ def extract_media_file(content):
         return media_file, text
 
     return None, content
+
+def extract_media_file_ios(content):
+    lines = content.splitlines()
+    media_file = None
+    cleaned_lines = []
+
+    pattern = re.compile(
+        r"<attached:\s*(.+\.(jpg|jpeg|png|gif|webp|mp4|mov|webm|3gp|opus|ogg|mp3|m4a|wav|aac|pdf))\s*>",
+        re.IGNORECASE
+    )
+
+    for line in lines:
+        match = pattern.search(line)
+        if match:
+            media_file = match.group(1)
+            continue  # remove attachment line from text
+        cleaned_lines.append(line)
+
+    cleaned_text = "\n".join(cleaned_lines).strip()
+    return media_file, cleaned_text
+
 
 def extract_url(content):
     """
@@ -205,6 +228,8 @@ def export_html(messages, input_folder, output_folder, user, case_number, wa_acc
                 media_html = f'<div class="media"><a href="{media_path}"><img src="{media_path}"></a></div>'
             elif ext in [".mp4", ".webm", ".mov"]:
                 media_html = f'<div class="media"><video controls src="{media_path}"></video></div>'
+            elif ext in [".mp3", ".m4a", ".wav", ".aac", ".opus", ".ogg"]:
+                media_html = f'<div class="media"><audio controls src="{media_path}"></audio></div>'
             else:
                 media_html = f'<div class="media"><a href="{media_path}">{msg["media"]}</a></div>'
         elif msg["url"]:
@@ -242,6 +267,83 @@ def read_messages(folder_path):
 
     return all_messages, folder_path
 
+def read_messages_ios(input_path):
+    input_path = Path(input_path)
+
+    # Pick TXT file
+    if input_path.is_dir():
+        txt_files = list(input_path.glob("*.txt"))
+        if not txt_files:
+            raise FileNotFoundError(f"No .txt file found in folder {input_path}")
+        txt_file = txt_files[0]
+    else:
+        txt_file = input_path
+
+    folder_path = txt_file.parent
+
+    with open(txt_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    messages: List[Dict] = []
+
+    current_msg: Optional[Dict] = None
+
+    for line in lines:
+        line = "".join(c for c in line if unicodedata.category(c)[0] != "C").strip()
+        if not line:
+            continue
+
+        if line.startswith("["):  # new message
+            # Append previous message if exists
+            if current_msg:
+                messages.append(current_msg)
+
+            # Extract timestamp
+            try:
+                ts_end = line.index("]")
+                timestamp = line[1:ts_end].strip()
+                rest = line[ts_end + 1:].strip()
+            except ValueError:
+                timestamp = ""
+                rest = line
+
+            # Extract sender up to first colon
+            if ":" in rest:
+                sender, content = rest.split(":", 1)
+                sender = sender.strip()
+                content = content.strip()
+            else:
+                sender = rest
+                content = ""
+
+            # Create new message
+            current_msg = {
+                "timestamp": timestamp,
+                "sender": sender,
+                "content": content,
+                "media": None,
+                "url": None
+            }
+
+            # Immediately extract media for this message only
+            media_file, text = extract_media_file_ios(current_msg["content"])
+            current_msg["media"] = media_file
+            current_msg["content"] = text
+
+        else:  # continuation line
+            if current_msg:
+                current_msg["content"] += "\n" + line
+                # Re-extract media for updated content
+                media_file, text = extract_media_file_ios(current_msg["content"])
+                current_msg["media"] = media_file
+                current_msg["content"] = text
+
+    # Append last message
+    if current_msg:
+        messages.append(current_msg)
+
+    return messages, folder_path
+
 
 def extract_zip(zip_path):
     """
@@ -266,6 +368,20 @@ def extract_chat_name(path):
         return chat_part.strip()
     return name.strip()
 
+def extract_chat_name_ios(file_path):
+    """
+    Extract chat name from iOS WhatsApp export.
+    Uses everything after the FIRST '-' in the filename.
+    """
+    name = file_path.stem  # strip .txt
+    if "-" in name:
+        # Split at first dash
+        parts = name.split("-", 1)
+        chat_name = parts[1].strip()
+    else:
+        chat_name = name.strip()
+    return chat_name
+
 def sanitize_filename(name):
     """
     Remove any not allowed chars
@@ -280,6 +396,7 @@ def main():
     parser = argparse.ArgumentParser(description="WhatsApp Chat Export parser with HTML report")
     parser.add_argument("--input", help="Path to folder, zip, or TXT with WhatsApp export")
     parser.add_argument("--output", help="Output folder or file path")
+    parser.add_argument("--platform", choices=["android", "ios"], help="Is the export from Android or from iOS? (android/ios)")
     parser.add_argument("--user", help="User generating the report")
     parser.add_argument("--case", help="Case number")
     parser.add_argument("--wa-name", help="WhatsApp account name")
@@ -314,7 +431,7 @@ def main():
     else:
         raise ValueError("Input must be a folder, ZIP file, or a TXT export")
 
-    chat_name = extract_chat_name(input_path)
+    
 
     user = args.user or config.get("user") or input("Enter your name: ").strip()
     case_number = args.case or config.get("case_number") or input("Enter case number: ").strip()
@@ -330,9 +447,18 @@ def main():
         is_group_chat = is_group_chat_input == "yes"
 
     # Get the messages and media
-    messages, folder_path = read_messages(folder_path)
 
-   # Generating HTML output
+    platform = args.platform or config.get("platform") or input("Enter source platform (android/ios): ").strip()
+    if platform == 'android':
+        messages, folder_path = read_messages(folder_path)
+        chat_name = extract_chat_name(input_path)
+    elif platform == 'ios':
+        messages, folder_path = read_messages_ios(folder_path)
+        chat_name = extract_chat_name_ios(input_path)
+    else:
+        raise ValueError("No valid source platform given!")
+   
+    # Generating HTML output
     chat_name_safe = sanitize_filename(chat_name)
     case_number_safe = sanitize_filename(case_number)
 
