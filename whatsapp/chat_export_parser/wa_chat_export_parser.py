@@ -124,7 +124,7 @@ def extract_media_file_ios(content):
     cleaned_lines = []
 
     pattern = re.compile(
-        r"<attached:\s*(.+\.(jpg|jpeg|png|gif|webp|mp4|mov|webm|3gp|opus|ogg|mp3|m4a|wav|aac|pdf))\s*>",
+        r"<\s*(?:Anhang|attached):\s*(-?.+?\.(?:jpg|jpeg|png|gif|webp|mp4|mov|webm|3gp|opus|ogg|mp3|m4a|wav|aac|pdf))\s*>",
         re.IGNORECASE
     )
 
