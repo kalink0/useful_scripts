@@ -1,0 +1,23 @@
+body { font-family: Arial, sans-serif; background: #f0f0f0; }
+.chat { max-width: 800px; margin: auto; padding: 20px; }
+.bubble { padding: 10px 15px; margin: 5px 0; border-radius: 15px; display: inline-block; max-width: 70%; }
+.timestamp { font-size: 0.8em; color: #666; margin-top: 5px; }
+.media { margin-top: 5px; }
+img { max-height: 150px; border-radius: 10px; }
+video { max-width: 100%; border-radius: 10px; }
+audio { max-width: 100%; margin-top: 5px; display: block; }
+.clear { clear: both; }
+.left { background: #e0e0e0; float: left; clear: both; color: black; }
+.right { background: #4CAF50; color: white; float: right; clear: both; }
+.owner { float: right; background: #4CAF50; color: white; border: 2px solid #FFD700; }
+.other { float: left; background: #e0e0e0; color: black; }
+#chat {
+    max-width: 800px;
+    margin: auto;
+    padding: 10px;
+    border: 1px solid #ccc;
+    overflow-y: auto;
+
+    /* initial height (will be overridden by JS) */
+    height: 400px;
+}
