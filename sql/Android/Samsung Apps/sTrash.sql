@@ -19,6 +19,8 @@ SELECT
     _size [File Size],
     mime_type [MIME Type],
     delete_package_name [App Context],
+    is_cloud [Cloud?],
+    user_id [User ID],
     strftime('%Y-%m-%d %H:%M:%S.', "date_deleted"/1000, 'unixepoch') || ("date_deleted"%1000) [Deletion Timestamp],
     strftime('%Y-%m-%d %H:%M:%S.', "date_expires"/1000, 'unixepoch') || ("date_expires"%1000) [Expiration Timestamp],
     extra [Extra Info JSON]
