@@ -17,6 +17,11 @@ Small batch scripts to update ALEAPP/iLEAPP and build Windows executables with P
 - For the create_exe* `ALEAPP` and/or `iLEAPP` folders plus their venvs present are required
   - The update scripts will create them if missing
 
+## Installing Git and Python (Windows)
+
+- Git: download and install Git for Windows from its official site, then open a new Command Prompt and run `git --version` to confirm.
+- Python: download and install Python from python.org, ensure you check “Add Python to PATH” during setup, then verify with `python --version` (or `py --version`).
+
 ## Typical usage
 
 1. Run the update script for the project you want:
