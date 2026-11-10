@@ -5,6 +5,9 @@ name: sauce build
 
 on:
   push:
+    # with only "tags" set, branch pushes would not trigger the workflow at all
+    branches:
+      - "**"
     paths:
       - "cellebrite/**"
       - ".github/workflows/sauce.yml"
