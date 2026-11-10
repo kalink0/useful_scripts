@@ -1,0 +1,4 @@
+# Optional: everything works with the Python standard library alone.
+# tkinterdnd2 only adds drag & drop of files/folders onto the GUI.
+#   pip install -r requirements.txt
+tkinterdnd2>=0.4

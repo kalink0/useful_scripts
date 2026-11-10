@@ -1,0 +1,84 @@
+# Build sauce executables for Windows and Linux.
+#   - every push touching cellebrite/ and manual runs: executables as workflow artifacts
+#   - tag "sauce-v*" (e.g. sauce-v1.0): additionally a GitHub release with the files
+name: sauce build
+
+on:
+  push:
+    paths:
+      - "cellebrite/**"
+      - ".github/workflows/sauce.yml"
+    tags:
+      - "sauce-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe: dist/sauce.exe
+          # oldest available runner = oldest glibc = binary runs on more distributions
+          - os: ubuntu-22.04
+            exe: dist/sauce
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: cellebrite
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: |
+          python -c "import tkinter"
+          python -m pip install --upgrade pip pyinstaller -r requirements.txt
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --name sauce_gui sauce.py
+          pyinstaller --noconfirm --onefile --console --collect-all tkinterdnd2 --name sauce sauce.py
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: pyinstaller --noconfirm --clean --onefile --collect-all tkinterdnd2 --name sauce sauce.py
+
+      - name: Test (built executable against generated test UFDRs)
+        run: |
+          python tests/make_test_ufdrs.py testdata
+          ./${{ matrix.exe }} testdata --csv testdata/result.csv || true   # exit code = worst light
+          python tests/make_test_ufdrs.py --check testdata/result.csv
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sauce-${{ runner.os }}
+          path: cellebrite/dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/sauce-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Rename Linux binary
+        run: mv artifacts/sauce-Linux/sauce artifacts/sauce-Linux/sauce-linux
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/sauce-Windows/*.exe
+            artifacts/sauce-Linux/sauce-linux
