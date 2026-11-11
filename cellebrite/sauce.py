@@ -59,6 +59,20 @@ CONTENT_CATS = ("Messages", "Contacts", "Locations", "Calls")  # "hardly any con
 SIM_DATA_CATS = ("Messages", "Contacts", "Calls")     # a SIM extraction with none of these is "empty"
 
 
+# media files in the UFDR, counted from the ZIP directory: Cellebrite's own categorization
+# (files/<category>/) is taken over as is, deliberately without own logic (e.g. no extension filter)
+FILE_CATS = {"Audio": "files/Audio/", "Video": "files/Video/"}
+
+
+def file_counts(names):
+    return Counter({c: sum(1 for n in names if n.startswith(prefix) and not n.endswith("/"))
+                    for c, prefix in FILE_CATS.items()})
+
+
+def fmt_files(files):
+    return " · ".join(f"{c} {files[c]:,}" for c in FILE_CATS)
+
+
 def category(model_type):
     for cat, types in CATEGORIES.items():
         if model_type in types or model_type[:-1] in types:  # Contacts -> Contact
@@ -409,10 +423,11 @@ def evaluate(r, min_items=MIN_ITEMS):
 def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False):
     """Check one UFDR. quick: extractions only (no content counts, much faster)."""
     res = {"file": str(path), "source": "", "quick": quick, "errors": [], "warnings": [],
-           "extractions": [], "models": Counter(), "cats": cat_counts({})}
+           "extractions": [], "models": Counter(), "cats": cat_counts({}), "files": Counter()}
     try:
         with zipfile.ZipFile(path) as zf:
             names = set(zf.namelist())
+            res["files"] = file_counts(names)
             if verify:
                 bad = zf.testzip()
                 if bad:
@@ -510,6 +525,7 @@ def format_result(r, full=True):
             out.append(f"      - {label:<{width}}    {'' if r.get('quick') else fmt_cats(e['cats'])}".rstrip())
         if not r.get("quick"):
             out.append(f"    Content: {fmt_cats(r['cats'])}")
+        out.append(f"    Files:   {fmt_files(r['files'])}")
         if full and r["models"]:
             out.append("    All item types:")
             for k, v in sorted(r["models"].items(), key=lambda kv: (-kv[1], kv[0])):
@@ -536,7 +552,7 @@ def write_csv(results, path, case=""):
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:  # BOM: Excel opens UTF-8 correctly
         w = csv.writer(fh, delimiter=";")
         w.writerow(["case", "file", "light", "reasons", "source", "extraction_count", "extractions",
-                    "sim_count", *CATEGORIES, *model_keys])
+                    "sim_count", *CATEGORIES, *(f"{c.lower()}_files" for c in FILE_CATS), *model_keys])
         for r in results:
             q = r.get("quick")
             exs = [e["label"] + (" [SIM]" if e["sim"] else "") + ("" if q else f" ({fmt_cats(e['cats'])})")
@@ -545,6 +561,7 @@ def write_csv(results, path, case=""):
                 case, r["file"], LIGHT_NAMES[r["light"]], " | ".join(t for _, t in r["reasons"]), r["source"],
                 len(r["extractions"]), " | ".join(exs), sum(e["sim"] for e in r["extractions"]),
                 *(("" if q else r["cats"][c]) for c in CATEGORIES),
+                *((r["files"][c] if r["ok"] else "") for c in FILE_CATS),
                 *(("" if q else r["models"].get(k, 0)) for k in model_keys),
             ])
 
@@ -618,11 +635,14 @@ def write_html(results, path, case="", settings=None):
             f"<td class='n'>{num(len(r['extractions']))}</td>"
             f"<td class='n'>{num(sum(x['sim'] for x in r['extractions']))}</td>"
             + "".join(f"<td class='n'>{cnum(c[k])}</td>" for k in CONTENT_CATS)
+            + "".join(f"<td class='n'>{num(r['files'][k])}</td>" for k in FILE_CATS)
             + f"<td>{reasons_html(r)}</td></tr>")
 
     details = []
     for r in results:
         body = [f"<p class='path'>{e(r['file'])} · source: {e(r['source'] or '-')}</p>", reasons_html(r)]
+        if r["ok"]:
+            body.append(f"<p>Files in UFDR: {e(fmt_files(r['files']))}</p>")
         if r["ok"] and r.get("quick"):
             body.append("<h3>Extractions</h3><ul>" + "".join(
                 f"<li>{e(x['label'])}{' <span class=sim>SIM</span>' if x['sim'] else ''}</li>"
@@ -662,7 +682,7 @@ def write_html(results, path, case="", settings=None):
 <span class="chip g">● GO: {n[GREEN]}</span><span class="chip y">● CHECK: {n[YELLOW]}</span>
 <span class="chip r">● STOP: {n[RED]}</span></div></section>
 <section class="card"><h2>Results</h2><div class="scroll"><table>
-<tr><th>Light</th><th>File</th><th class="n">Extr.</th><th class="n">SIM</th>{''.join(f"<th class='n'>{k}</th>" for k in CONTENT_CATS)}<th>Reasons</th></tr>
+<tr><th>Light</th><th>File</th><th class="n">Extr.</th><th class="n">SIM</th>{''.join(f"<th class='n'>{k}</th>" for k in CONTENT_CATS)}{''.join(f"<th class='n'>{k}</th>" for k in FILE_CATS)}<th>Reasons</th></tr>
 {''.join(rows)}
 </table></div></section>
 <section><h2>Details</h2>{''.join(details)}</section>
@@ -896,7 +916,8 @@ def run_gui():
     tframe = ttk.Frame(pane, style="Card.TFrame")
     cols = (("light", "Light", 95, "w"), ("file", "File", 240, "w"), ("ext", "Extr.", 55, "center"),
             ("sim", "SIM", 45, "center"), ("msg", "Messages", 85, "center"), ("con", "Contacts", 80, "center"),
-            ("loc", "Locations", 85, "center"), ("call", "Calls", 70, "center"), ("note", "Reasons", 300, "w"))
+            ("loc", "Locations", 85, "center"), ("call", "Calls", 70, "center"),
+            ("aud", "Audio", 65, "center"), ("vid", "Video", 65, "center"), ("note", "Reasons", 300, "w"))
     tree = ttk.Treeview(tframe, columns=[c[0] for c in cols], show="headings", selectmode="browse", height=7)
     for cid, title, width, anchor in cols:
         tree.heading(cid, text=title, anchor=anchor)
@@ -950,7 +971,8 @@ def run_gui():
         tree.insert("", pos, iid=str(i), tags=(f"L{r['light']}",), values=(
             light, Path(r["file"]).name,
             len(r["extractions"]) if ok else "", sum(e["sim"] for e in r["extractions"]) if ok else "",
-            *((("–" if r.get("quick") else f"{cats[c]:,}") if ok else "") for c in CONTENT_CATS), note))
+            *((("–" if r.get("quick") else f"{cats[c]:,}") if ok else "") for c in CONTENT_CATS),
+            *((f"{r['files'][c]:,}" if ok else "") for c in FILE_CATS), note))
 
     # ---- run
     def worker(files, n_jobs, **kw):

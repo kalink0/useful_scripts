@@ -19,6 +19,9 @@ Definitions:
 - **Hardly any content**: messages, contacts, locations and calls are each below `--min-items` (default 5).
 - Categories: Messages = InstantMessage, SMS, MMS, Email (incl. chat messages) · Contacts = Contact ·
   Locations = Location, Journey · Calls = Call.
+- **Audio / Video files**: number of files in the UFDR under `files/Audio/` and `files/Video/`, i.e.
+  exactly Cellebrite's own file categorization, taken over as is (no own logic; it can include
+  cache/system files such as `.exo` or `.tts`). Per UFDR, not per extraction; not part of the rating.
 
 Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEGORIES`,
 `CONTENT_CATS`, `SIM_DATA_CATS`) and `evaluate()`.
