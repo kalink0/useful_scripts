@@ -14,7 +14,7 @@ extractions, SIM extractions and the content per extraction, and rates the UFDR:
 
 Definitions:
 
-- **SIM extraction**: `SIM` as a word in the extraction's name/type/device name.
+- **SIM extraction**: `SIM` or `USIM`, not touching other letters (e.g. `SIM Card`, `EXTRACTION_SIM`), in the extraction's name/type/device name.
 - **Empty SIM**: no messages, contacts or calls in that extraction (ICCID/IMSI alone are no data).
 - **Hardly any content**: messages, contacts, locations and calls are each below `--min-items` (default 5).
 - Categories: Messages = InstantMessage, SMS, MMS, Email (incl. chat messages) · Contacts = Contact ·
@@ -27,13 +27,17 @@ Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEG
 
 ```
 python3 sauce.py                     # GUI
-python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [--source auto|xml|db]
+python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [-q] [-j N] [--source auto|xml|db]
                       [--min-items N] [--case NO] [--csv out.csv] [--html report.html]
 
   -r, --recursive   search subfolders of given folders too
   -s, --summary     also list all item types with counts
   -v, --verify      verify ZIP integrity: read every member and check its CRC (slow)
-  --source          auto (default): report.xml if present, otherwise DbData/database.db
+  -q, --quick       only count extractions and detect SIMs (seconds instead of minutes);
+                    no content counts, so an empty SIM is only YELLOW and a truncated
+                    report.xml is not noticed - use the full check before importing
+  -j, --jobs N      check N UFDRs in parallel (default: CPU cores, max. 4; use 1 on a single HDD)
+  --source          auto (default): DbData/database.db if present (much faster), otherwise report.xml
   --min-items N     threshold for "hardly any content" (default 5)
   --case NO         optional case number, shown in CSV and HTML
   --csv FILE        also write results as CSV (; separated, opens in Excel)
@@ -80,11 +84,19 @@ The Linux binary needs a glibc at least as new as the build system's.
 | `xml` | `report.xml` | all |
 | `db`  | `DbData/database.db` (PostgreSQL `pg_dump -Fc` archive) | PA 10+ |
 
+`auto` (default) uses the DB if present, otherwise report.xml. The DB is much faster (60 GB iPhone
+UFDR: 11 s instead of 2 min). If the DB cannot be read (e.g. zstd/lz4-compressed dump), report.xml is
+used with a warning.
+
 Both are streamed directly from the ZIP, nothing is extracted to disk. Items are assigned to their
 extraction via `extractionId` (XML) or `SourceExtraction` (DB). If `DbData/database.json` exists,
 its `SourceExtractionIds` are compared with the extractions found (mismatch: yellow).
 
 Counts differ slightly between the sources:
+
+- report.xml lists many chat messages twice (in the chat and at top level); SAUCE counts each
+  message id once, so the message counts of both sources match. Messages embedded in other
+  messages are listed separately as `EmbeddedInstantMessage(s)` and are not counted as messages.
 
 - XML uses Cellebrite's model names (`Contact`, `Call`), the DB its table names (`Contacts`, `Calls`).
 - The XML only contains what was exported into the report; the DB contains the full project

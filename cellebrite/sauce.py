@@ -16,14 +16,14 @@ and rates it:
 Data sources (--source):
   xml  report.xml               - all UFDR versions
   db   DbData/database.db       - PA 10+ (PostgreSQL custom-format dump)
-  auto report.xml if present, otherwise database.db (default)
+  auto database.db if present (much faster), otherwise report.xml (default)
 If DbData/database.json exists, its SourceExtractionIds are used as a cross-check.
 
 Only the standard library is used (GUI: tkinter, drag & drop: optional tkinterdnd2).
 
 Usage:
   sauce.py                         start the GUI
-  sauce.py <ufdr|folder> ... [-r] [-s] [-v] [--source auto|xml|db] [--min-items N]
+  sauce.py <ufdr|folder> ... [-r] [-s] [-v] [-q] [-j N] [--source auto|xml|db] [--min-items N]
                                         [--case NO] [--csv FILE] [--html FILE]
 """
 import argparse
@@ -37,7 +37,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
-SIM_RE = re.compile(r"\bSIM\b", re.IGNORECASE)
+# "SIM" not touching other letters: "SIM Card", "EXTRACTION_SIM", "USIM" - but not "SIMPLE"
+SIM_RE = re.compile(r"(?<![a-z])U?SIM(?![a-z])", re.IGNORECASE)
 XML_NAME = "report.xml"
 DB_NAME = "DbData/database.db"
 DB_JSON = "DbData/database.json"
@@ -53,6 +54,7 @@ CATEGORIES = {
     "Locations": {"Location", "Journey"},
     "Calls": {"Call"},
 }
+NESTED_COUNTED = CATEGORIES["Messages"]  # counted also when nested in another model (messages in chats)
 CONTENT_CATS = ("Messages", "Contacts", "Locations", "Calls")  # "hardly any content" check
 SIM_DATA_CATS = ("Messages", "Contacts", "Calls")     # a SIM extraction with none of these is "empty"
 
@@ -70,39 +72,30 @@ def tag(elem):
     return elem.tag.rsplit("}", 1)[-1]
 
 
-def parse_xml(fh):
-    """Stream report.xml. Returns (extractions, Counter{(extraction id, model type): n}).
+CHUNK = 4 << 20
+# header (sourceExtractions, metadata) ends where the big sections start
+BODY_START = re.compile(rb"<(?:taggedFiles|decodedData)\b")
+# body scan: CDATA is matched (and ignored) so chat text like "<model" inside it is not counted
+BODY_TAG = re.compile(rb"<!\[CDATA\[.*?\]\]>|<(/?)(modelType|model|extractionInfo)\b([^>]*)>", re.S)
+ATTR = re.compile(rb'([\w:.-]+)="([^"]*)"')
 
-    Counts top-level models (direct children of <modelType>) plus InstantMessages
-    nested in Chats.
-    """
-    extractions = {}  # id -> dict
-    counts = Counter()
+
+def _attrs(raw):
+    from html import unescape
+    return {k.decode(): unescape(v.decode("utf-8", "replace")) for k, v in ATTR.findall(raw)}
+
+
+def _parse_header(data, extractions):
+    """Parse the report.xml header (everything before taggedFiles/decodedData) with a real XML parser."""
+    parser = ET.XMLPullParser(events=("start", "end"))
+    parser.feed(data)
     section = None
-    path, ext_stack = [], []
-    root = None
-
-    for event, elem in ET.iterparse(fh, events=("start", "end")):
+    for event, elem in parser.read_events():
         name = tag(elem)
         if event == "start":
-            path.append(name)
-            if root is None:
-                root = elem
             if name == "metadata":
                 section = elem.get("section")
-            elif name == "model":
-                ext = elem.get("extractionId") or (ext_stack[-1] if ext_stack else None)
-                ext_stack.append(ext)
-                mtype = elem.get("type", "?")
-                if path[-2] == "modelType" or mtype == "InstantMessage":
-                    counts[(ext, mtype)] += 1
-            continue
-
-        # end event
-        path.pop()
-        if name == "model":
-            ext_stack.pop()
-        if name == "extractionInfo":
+        elif name == "extractionInfo":
             extractions[elem.get("id")] = dict(elem.attrib)
         elif name == "item" and section == "Extraction Data":
             ex_id = elem.get("sourceExtraction")
@@ -110,12 +103,81 @@ def parse_xml(fh):
                 extractions.setdefault(ex_id, {"id": ex_id})[elem.get("name")] = (elem.text or "").strip()
         elif name == "metadata":
             section = None
-        # keep memory flat: drop finished subtrees below the root
-        if len(path) == 1:
-            root.clear()
-        elif len(path) > 1 and name in ("model", "file", "node"):
-            elem.clear()
 
+
+def parse_xml(fh, quick=False):
+    """Stream report.xml. Returns (extractions, Counter{(extraction id, model type): n}).
+
+    The header is parsed with ElementTree; the (huge) rest is scanned with a regex for
+    <model> tags, which is several times faster. Counts top-level models (direct
+    children of <modelType>) plus messages (NESTED_COUNTED) nested in Chats; a message
+    listed both in its chat and at top level (same id) is counted once.
+    quick: stop after the header (extractions only, no counts).
+    """
+    extractions = {}  # id -> dict
+    counts = Counter()
+    ext_stack = []  # (extraction id, model type) of the open <model> elements
+    seen = set()  # hashes of counted message ids: report.xml lists chat messages also at top level
+    header, rest, tail = b"", b"", b""
+    in_body = False
+
+    while True:
+        chunk = fh.read(CHUNK)
+        if not in_body:
+            header += chunk
+            m = BODY_START.search(header)
+            if m is None and chunk:
+                continue
+            in_body = True
+            if m is None:  # no body at all
+                _parse_header(header, extractions)
+                tail = header[-64:]
+                break
+            _parse_header(header[:m.start()], extractions)
+            if quick:
+                return list(extractions.values()), counts
+            chunk, header = header[m.start():], b""
+        if not chunk:
+            break
+        data = rest + chunk
+        # cut before an incomplete tag or an unterminated CDATA section at the chunk end
+        cut = data.rfind(b"<")
+        cdata = data.rfind(b"<![CDATA[")
+        if cdata > data.rfind(b"]]>"):
+            cut = min(cut, cdata)
+        data, rest = data[:cut], data[cut:]
+        tail = (tail + data)[-64:]
+        for m in BODY_TAG.finditer(data):
+            close, name, raw = m.groups()
+            if name is None or name == b"modelType":
+                continue
+            if name == b"extractionInfo":  # normally in the header; just in case
+                if not close:
+                    a = _attrs(raw)
+                    extractions.setdefault(a.get("id"), {}).update(a)
+                continue
+            if close:
+                if not ext_stack:
+                    raise ValueError("report.xml not well-formed (unbalanced </model>)")
+                ext_stack.pop()
+                continue
+            a = _attrs(raw)
+            ext = a.get("extractionId") or (ext_stack[-1][0] if ext_stack else None)
+            mtype = a.get("type", "?")
+            if not ext_stack or mtype in NESTED_COUNTED:
+                if ext_stack and ext_stack[-1][1] in NESTED_COUNTED:
+                    mtype = "Embedded" + mtype  # message inside a message (database.db: own table)
+                mid = a.get("id")
+                if mid is None or hash(mid) not in seen:  # 64-bit hash: less memory than the ids
+                    counts[(ext, mtype)] += 1
+                    if mid is not None:
+                        seen.add(hash(mid))
+            if not raw.rstrip().endswith(b"/"):
+                ext_stack.append((ext, mtype))
+
+    tail = (tail + rest).rstrip()
+    if ext_stack or not tail.endswith(b">") or not re.search(rb"</(?:\w+:)?project>$", tail):
+        raise ValueError("report.xml truncated or not well-formed")
     return list(extractions.values()), counts
 
 
@@ -215,7 +277,16 @@ class PgDump:
             yield rest
 
     def count_rows(self, table):
-        return sum(1 for _ in self.lines(table))
+        """Number of rows without splitting lines (newlines inside values are escaped in COPY data)."""
+        n, tail = 0, b""
+        for c in self.chunks(table):
+            n += c.count(b"\n")
+            tail = (tail + c)[-64:]
+        body = tail.rstrip(b"\n")
+        if not body:
+            return 0
+        lines = n - (len(tail) - len(body)) + 1  # lines up to the last non-empty one
+        return lines - (body == b"\\." or body.endswith(b"\n\\."))  # end marker line
 
     def rows(self, table):
         for line in self.lines(table):
@@ -229,21 +300,34 @@ def count_models(dump, t, counts):
 
     Model tables carry DecodingConfidence/ModelLabels/SourceExtraction; junction
     tables have a '_' in their name. Rows that point to a parent model via a
-    '...DtoId' column are sub-models (e.g. Locations of a Journey) and are skipped.
+    '...DtoId' column are sub-models (e.g. Locations of a Journey) and are skipped -
+    except messages, which always belong to a chat.
     """
     cols = t["columns"]
     if not {"DecodingConfidence", "ModelLabels", "SourceExtraction"} <= set(cols) or "_" in t["name"]:
         return
+    name = t["name"]
+    # messages belong to a chat (parent column) but are counted anyway
+    parent_i = [] if category(name) == "Messages" else [i for i, c in enumerate(cols) if c.endswith("DtoId")]
+    if category(name) is None and not parent_i:
+        # not needed per extraction (only in "All item types"): just count the rows
+        counts[(None, name)] += dump.count_rows(t)
+        return
     ext_i = cols.index("SourceExtraction")
-    parent_i = [i for i, c in enumerate(cols) if c.endswith("DtoId")]
+    rows = Counter()
     for line in dump.lines(t):
         vals = line.split(b"\t")
         if all(vals[i] == b"\\N" for i in parent_i):
-            counts[(vals[ext_i].decode("ascii", "replace"), t["name"])] += 1
+            rows[vals[ext_i]] += 1
+    for ext, n in rows.items():
+        counts[(ext.decode("ascii", "replace"), name)] += n
 
 
-def parse_db(fh):
-    """Read database.db. Returns (extractions, Counter{(extraction id, table): n})."""
+def parse_db(fh, quick=False):
+    """Read database.db. Returns (extractions, Counter{(extraction id, table): n}).
+
+    quick: read only the ExtractionInfos table (no counts).
+    """
     dump = PgDump(fh)
     extractions, counts = [], Counter()
     for t in dump.tables():
@@ -253,7 +337,9 @@ def parse_db(fh):
                     "id": r.get("Id"), "name": r.get("Name"), "type": r.get("Type"),
                     "deviceName": r.get("DeviceName"), "fullName": r.get("FullDeviceName"),
                 })
-        else:
+            if quick:
+                break
+        elif not quick:
             count_models(dump, t, counts)
     return extractions, counts
 
@@ -305,12 +391,14 @@ def evaluate(r, min_items=MIN_ITEMS):
         elif n == 2:
             reasons.append((YELLOW, "2 extractions - separate memory card / SIM?"))
         for e in exs:
-            if e["sim"]:
+            if e["sim"] and r.get("quick"):
+                reasons.append((YELLOW, f"SIM extraction (content not checked, quick mode): {e['label']}"))
+            elif e["sim"]:
                 if sum(e["cats"][c] for c in SIM_DATA_CATS) == 0:
                     reasons.append((RED, f"empty SIM extraction: {e['label']} - do not import"))
                 else:
                     reasons.append((YELLOW, f"SIM extraction with data: {e['label']}"))
-        if n and all(r["cats"][c] < min_items for c in CONTENT_CATS):
+        if n and not r.get("quick") and all(r["cats"][c] < min_items for c in CONTENT_CATS):
             reasons.append((YELLOW, "hardly any content: " + ", ".join(f"{c} {r['cats'][c]}" for c in CONTENT_CATS)))
         reasons += [(YELLOW, w) for w in r["warnings"]]
     r["reasons"] = reasons
@@ -318,8 +406,9 @@ def evaluate(r, min_items=MIN_ITEMS):
     return r
 
 
-def check(path, verify=False, source="auto", min_items=MIN_ITEMS):
-    res = {"file": str(path), "source": "", "errors": [], "warnings": [],
+def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False):
+    """Check one UFDR. quick: extractions only (no content counts, much faster)."""
+    res = {"file": str(path), "source": "", "quick": quick, "errors": [], "warnings": [],
            "extractions": [], "models": Counter(), "cats": cat_counts({})}
     try:
         with zipfile.ZipFile(path) as zf:
@@ -328,15 +417,26 @@ def check(path, verify=False, source="auto", min_items=MIN_ITEMS):
                 bad = zf.testzip()
                 if bad:
                     res["errors"].append(f"CRC error in member: {bad}")
-            if source == "auto":
-                source = "xml" if XML_NAME in names else "db"
+            auto = source == "auto"
+            if auto:
+                source = "db" if DB_NAME in names else "xml"
             member = XML_NAME if source == "xml" else DB_NAME
             res["source"] = source
             if member not in names:
                 res["errors"].append(f"{member} missing")
             else:
-                with zf.open(member) as fh:
-                    exs, counts = (parse_xml if source == "xml" else parse_db)(fh)
+                try:
+                    with zf.open(member) as fh:
+                        exs, counts = (parse_xml if source == "xml" else parse_db)(fh, quick)
+                except (ValueError, IndexError, zlib.error) as e:
+                    if not (auto and source == "db" and XML_NAME in names):
+                        raise
+                    # e.g. zstd/lz4-compressed dump: fall back to report.xml
+                    res["warnings"].append(f"database.db not readable ({e}) - report.xml used")
+                    source = res["source"] = "xml"
+                    member = XML_NAME
+                    with zf.open(member) as fh:
+                        exs, counts = parse_xml(fh, quick)
                 for e in exs:
                     models = Counter({m: n for (x, m), n in counts.items() if x == e.get("id")})
                     res["extractions"].append({"id": e.get("id"), "label": describe(e), "sim": is_sim(e),
@@ -359,16 +459,57 @@ def check(path, verify=False, source="auto", min_items=MIN_ITEMS):
     return evaluate(res, min_items)
 
 
+def default_jobs():
+    import os
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+def check_all(files, jobs=1, running=None, **kw):
+    """Check UFDRs, yielding (index, result) as they finish; jobs > 1: in parallel processes.
+
+    running: optional callback, called with the list of files currently being checked.
+    """
+    for i, r in _check_all(files, jobs, running or (lambda _: None), **kw):
+        r["idx"] = i
+        yield i, r
+
+
+def _check_all(files, jobs, running, **kw):
+    if jobs <= 1 or len(files) <= 1:
+        for i, f in enumerate(files):
+            running([f])
+            yield i, check(f, **kw)
+        return
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    # spawn: safe with the GUI thread and in the PyInstaller executables (see freeze_support in main)
+    with ProcessPoolExecutor(min(jobs, len(files)), mp_context=multiprocessing.get_context("spawn")) as ex:
+        futures = {ex.submit(check, f, **kw): i for i, f in enumerate(files)}
+        pending = dict(futures)
+
+        def report():
+            # futures are handed to the workers in order; the pool may pre-queue one extra
+            running([files[i] for i in sorted(pending.values())[:jobs]])
+
+        report()
+        for fut in as_completed(futures):
+            del pending[fut]
+            report()
+            yield futures[fut], fut.result()
+
+
 def format_result(r, full=True):
-    out = [f"[{LIGHT_NAMES[r['light']]}] {r['file']}" + (f"  (source: {r['source']})" if r["source"] else "")]
+    src = r["source"] + (", quick" if r.get("quick") else "")
+    out = [f"[{LIGHT_NAMES[r['light']]}] {r['file']}" + (f"  (source: {src})" if r["source"] else "")]
     out += [f"    {'!' if lvl == RED else '?'} {text}" for lvl, text in r["reasons"]]
     if r["ok"]:
         out.append(f"    Extractions: {len(r['extractions'])}")
         labels = [e["label"] + ("  [SIM]" if e["sim"] else "") for e in r["extractions"]]
         width = max(map(len, labels), default=0)
         for label, e in zip(labels, r["extractions"]):
-            out.append(f"      - {label:<{width}}    {fmt_cats(e['cats'])}")
-        out.append(f"    Content: {fmt_cats(r['cats'])}")
+            out.append(f"      - {label:<{width}}    {'' if r.get('quick') else fmt_cats(e['cats'])}".rstrip())
+        if not r.get("quick"):
+            out.append(f"    Content: {fmt_cats(r['cats'])}")
         if full and r["models"]:
             out.append("    All item types:")
             for k, v in sorted(r["models"].items(), key=lambda kv: (-kv[1], kv[0])):
@@ -397,12 +538,14 @@ def write_csv(results, path, case=""):
         w.writerow(["case", "file", "light", "reasons", "source", "extraction_count", "extractions",
                     "sim_count", *CATEGORIES, *model_keys])
         for r in results:
-            exs = [e["label"] + (" [SIM]" if e["sim"] else "") + f" ({fmt_cats(e['cats'])})"
+            q = r.get("quick")
+            exs = [e["label"] + (" [SIM]" if e["sim"] else "") + ("" if q else f" ({fmt_cats(e['cats'])})")
                    for e in r["extractions"]]
             w.writerow([
                 case, r["file"], LIGHT_NAMES[r["light"]], " | ".join(t for _, t in r["reasons"]), r["source"],
                 len(r["extractions"]), " | ".join(exs), sum(e["sim"] for e in r["extractions"]),
-                *(r["cats"][c] for c in CATEGORIES), *(r["models"].get(k, 0) for k in model_keys),
+                *(("" if q else r["cats"][c]) for c in CATEGORIES),
+                *(("" if q else r["models"].get(k, 0)) for k in model_keys),
             ])
 
 
@@ -468,18 +611,23 @@ def write_html(results, path, case="", settings=None):
     for r in results:
         ok, c = r["ok"], r["cats"]
         num = (lambda v: f"{v:,}") if ok else (lambda v: "")
+        cnum = num if not r.get("quick") else (lambda v: "–")
         rows.append(
             f"<tr class='{cls[r['light']]}'><td class='light'>● {words[r['light']]}</td>"
             f"<td><b>{e(Path(r['file']).name)}</b><div class='path'>{e(r['file'])}</div></td>"
             f"<td class='n'>{num(len(r['extractions']))}</td>"
             f"<td class='n'>{num(sum(x['sim'] for x in r['extractions']))}</td>"
-            + "".join(f"<td class='n'>{num(c[k])}</td>" for k in CONTENT_CATS)
+            + "".join(f"<td class='n'>{cnum(c[k])}</td>" for k in CONTENT_CATS)
             + f"<td>{reasons_html(r)}</td></tr>")
 
     details = []
     for r in results:
         body = [f"<p class='path'>{e(r['file'])} · source: {e(r['source'] or '-')}</p>", reasons_html(r)]
-        if r["ok"]:
+        if r["ok"] and r.get("quick"):
+            body.append("<h3>Extractions</h3><ul>" + "".join(
+                f"<li>{e(x['label'])}{' <span class=sim>SIM</span>' if x['sim'] else ''}</li>"
+                for x in r["extractions"]) + "</ul><p class='path'>quick mode: content not counted</p>")
+        elif r["ok"]:
             body.append("<h3>Extractions</h3><div class='scroll'><table><tr><th>Extraction</th>"
                         + "".join(f"<th class='n'>{k}</th>" for k in CATEGORIES) + "</tr>")
             for x in r["extractions"]:
@@ -609,7 +757,8 @@ def run_gui():
                  lightcolor=C["accent"], darkcolor=C["accent"], bordercolor="#e2e7ee", thickness=px(6))
 
     inputs, results, events = [], [], queue.Queue()
-    opt = {k: tk.BooleanVar(value=False) for k in ("recursive", "verify")}
+    opt = {k: tk.BooleanVar(value=False) for k in ("recursive", "verify", "quick")}
+    jobs = tk.IntVar(value=default_jobs())
     min_items = tk.IntVar(value=MIN_ITEMS)
     case_no = tk.StringVar()
     run_settings = {}
@@ -723,7 +872,10 @@ def run_gui():
     r2.pack(fill="x")
     ttk.Checkbutton(r2, text="Include subfolders", variable=opt["recursive"]).pack(side="left")
     ttk.Checkbutton(r2, text="Verify ZIP integrity (slow)", variable=opt["verify"]).pack(side="left", padx=px(14))
-    ttk.Label(r2, text="Min. items", style="Muted.TLabel").pack(side="left", padx=(px(6), px(6)))
+    ttk.Checkbutton(r2, text="Quick (extractions only)", variable=opt["quick"]).pack(side="left")
+    ttk.Label(r2, text="Parallel", style="Muted.TLabel").pack(side="left", padx=(px(20), px(6)))
+    ttk.Spinbox(r2, from_=1, to=32, textvariable=jobs, width=3).pack(side="left")
+    ttk.Label(r2, text="Min. items", style="Muted.TLabel").pack(side="left", padx=(px(20), px(6)))
     ttk.Spinbox(r2, from_=0, to=100000, textvariable=min_items, width=5).pack(side="left")
     ttk.Label(r2, text="Source", style="Muted.TLabel").pack(side="left", padx=(px(20), px(6)))
     ttk.Combobox(r2, textvariable=source, values=("auto", "xml", "db"), width=6,
@@ -791,21 +943,30 @@ def run_gui():
     tree.bind("<<TreeviewSelect>>", on_select)
     show_detail("Select a row to see details.")
 
-    def add_row(i, r):
+    def add_row(i, r, pos="end"):
         light = ("●  GO", "●  CHECK", "●  STOP")[r["light"]]
         note = " | ".join(t for _, t in sorted(r["reasons"], key=lambda x: -x[0]))
         ok, cats = r["ok"], r["cats"]
-        tree.insert("", "end", iid=str(i), tags=(f"L{r['light']}",), values=(
+        tree.insert("", pos, iid=str(i), tags=(f"L{r['light']}",), values=(
             light, Path(r["file"]).name,
             len(r["extractions"]) if ok else "", sum(e["sim"] for e in r["extractions"]) if ok else "",
-            *((f"{cats[c]:,}" if ok else "") for c in CONTENT_CATS), note))
+            *((("–" if r.get("quick") else f"{cats[c]:,}") if ok else "") for c in CONTENT_CATS), note))
 
     # ---- run
-    def worker(files, verify, src, min_n):
-        for i, f in enumerate(files, 1):
-            events.put(("progress", (i, f"Checking {i}/{len(files)}:  {f.name}")))
-            events.put(("result", check(f, verify, src, min_n)))
-        events.put(("done", None))
+    def worker(files, n_jobs, **kw):
+        done = 0
+
+        def running(fs):
+            if fs:
+                events.put(("progress", (done + 1, f"{done}/{len(files)} done  ·  checking:  "
+                                         + ",  ".join(Path(f).name for f in fs))))
+
+        try:
+            for _, r in check_all(files, n_jobs, running=running, **kw):
+                done += 1
+                events.put(("result", r))
+        finally:
+            events.put(("done", None))
 
     def poll():
         try:
@@ -816,14 +977,15 @@ def run_gui():
                     status.set(data[1])
                 elif kind == "result":
                     results.append(data)
-                    add_row(len(results) - 1, data)
+                    add_row(len(results) - 1, data, sum(r["idx"] < data["idx"] for r in results))
                     prog["value"] = len(results)
                 elif kind == "done":
                     status.set(footer(results))
                     btn_run.configure(state="normal")
                     for b in (btn_csv, btn_html):
                         b.configure(state="normal" if results else "disabled")
-                    worst = max(range(len(results)), key=lambda i: (results[i]["light"], -i), default=0)
+                    worst = max(range(len(results)), key=lambda i: (results[i]["light"], -results[i]["idx"]),
+                                default=0)
                     first_bad = str(worst)
                     if results:
                         tree.selection_set(first_bad)
@@ -852,9 +1014,15 @@ def run_gui():
         btn_html.configure(state="disabled")
         run_settings.clear()
         run_settings.update({"Source": source.get(), "Min. items": min_n,
-                             "ZIP integrity verified": "yes" if opt["verify"].get() else "no"})
-        threading.Thread(target=worker, daemon=True,
-                         args=(files, opt["verify"].get(), source.get(), min_n)).start()
+                             "ZIP integrity verified": "yes" if opt["verify"].get() else "no",
+                             "Mode": "quick (extractions only)" if opt["quick"].get() else "full"})
+        try:
+            n_jobs = max(1, int(jobs.get()))
+        except (tk.TclError, ValueError):
+            n_jobs = default_jobs()
+            jobs.set(n_jobs)
+        threading.Thread(target=worker, daemon=True, args=(files, n_jobs), kwargs=dict(
+            verify=opt["verify"].get(), source=source.get(), min_items=min_n, quick=opt["quick"].get())).start()
         poll()
 
     def export(kind):
@@ -865,11 +1033,12 @@ def run_gui():
                                             filetypes=[(kind.upper(), "*" + ext)], initialfile=stem + ext)
         if not path:
             return
+        ordered = sorted(results, key=lambda r: r["idx"])  # input order
         try:
             if kind == "html":
-                write_html(results, path, case, run_settings)
+                write_html(ordered, path, case, run_settings)
             else:
-                write_csv(results, path, case)
+                write_csv(ordered, path, case)
             status.set(f"{kind.upper()} written: {path}")
         except OSError as e:
             messagebox.showerror("SAUCE", f"Could not write {kind.upper()}:\n{e}")
@@ -883,6 +1052,8 @@ def run_gui():
 # --------------------------------------------------------------------------- CLI
 
 def main():
+    import multiprocessing
+    multiprocessing.freeze_support()  # parallel checks in the PyInstaller executables
     if len(sys.argv) == 1 or sys.argv[1:] == ["--gui"]:
         run_gui()
         return
@@ -896,7 +1067,12 @@ def main():
                     help=f"'hardly any content' if messages, contacts, locations and calls are each below N (default {MIN_ITEMS})")
     ap.add_argument("-v", "--verify", action="store_true", help="verify ZIP integrity: read every member and check its CRC (slow on big UFDRs)")
     ap.add_argument("--source", choices=("auto", "xml", "db"), default="auto",
-                    help="data source: report.xml, DbData/database.db, or auto (xml if present)")
+                    help="data source: report.xml, DbData/database.db, or auto (db if present - much faster)")
+    ap.add_argument("-q", "--quick", action="store_true",
+                    help="quick: only count extractions and detect SIMs, no content counts "
+                         "(much faster; an empty SIM cannot be told from one with data)")
+    ap.add_argument("-j", "--jobs", type=int, default=default_jobs(),
+                    help=f"check N UFDRs in parallel (default {default_jobs()}; use 1 for a single slow disk)")
     ap.add_argument("--csv", type=Path, help="also write results to this CSV file")
     ap.add_argument("--html", type=Path, help="also write an HTML report to this file")
     ap.add_argument("--case", default="", help="optional case number (shown in CSV/HTML)")
@@ -909,17 +1085,19 @@ def main():
         sys.exit("No .ufdr files found.")
 
     results = []
-    for f in files:
-        r = check(f, args.verify, args.source, args.min_items)
-        print("\n" + format_result(r, full=args.summary))
+    for _, r in check_all(files, args.jobs, verify=args.verify, source=args.source,
+                          min_items=args.min_items, quick=args.quick):
+        print("\n" + format_result(r, full=args.summary), flush=True)
         results.append(r)
+    results.sort(key=lambda r: r["idx"])  # exports in input order
 
     if args.csv:
         write_csv(results, args.csv, args.case)
         print(f"\nCSV written: {args.csv}")
     if args.html:
         write_html(results, args.html, args.case, {"Source": args.source, "Min. items": args.min_items,
-                                                   "ZIP integrity verified": "yes" if args.verify else "no"})
+                                                   "ZIP integrity verified": "yes" if args.verify else "no",
+                                                   "Mode": "quick (extractions only)" if args.quick else "full"})
         print(f"HTML written: {args.html}")
 
     print("\n" + footer(results))
