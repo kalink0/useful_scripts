@@ -80,8 +80,24 @@ jobs:
           path: artifacts
       - name: Rename Linux binary
         run: mv artifacts/sauce-Linux/sauce artifacts/sauce-Linux/sauce-linux
+      - name: Version from tag (sauce-v1.1 -> v1.1)
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#sauce-}" >> "$GITHUB_OUTPUT"
+      # this repo holds many tools: name the release clearly and never mark it as the repo's "latest"
       - uses: softprops/action-gh-release@v2
         with:
+          name: SAUCE ${{ steps.version.outputs.version }}
+          make_latest: false
+          body: |
+            **SAUCE – SIM And UFDR Content Evaluator** (only the `cellebrite/` folder of this repository).
+            Traffic light for importing Cellebrite UFDRs: integrity, extractions, SIM, content.
+            See [cellebrite/README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/cellebrite/README.md).
+
+            | File | Platform |
+            |---|---|
+            | `sauce_gui.exe` | Windows, GUI |
+            | `sauce.exe` | Windows, CLI (GUI without arguments) |
+            | `sauce-linux` | Linux, GUI without arguments, CLI with arguments |
           files: |
             artifacts/sauce-Windows/*.exe
             artifacts/sauce-Linux/sauce-linux
