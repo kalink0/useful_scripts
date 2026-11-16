@@ -8,6 +8,7 @@ Licenses are counted per extraction, so for every UFDR it checks:
   - number of extractions (1 per device is normal)
   - SIM extractions, and whether they contain any data (empty SIMs only cost a license)
   - content per extraction: messages, contacts, locations, calls (+ all item types)
+  - apps: messages per app with first / last message (information only, not rated)
 and rates it:
   RED     defective UFDR, empty SIM extraction, >= 3 extractions
   YELLOW  2 extractions, SIM extraction with data, hardly any content, other warnings
@@ -64,6 +65,76 @@ SIM_DATA_CATS = ("Messages", "Contacts", "Calls")     # a SIM extraction with no
 FILE_CATS = {"Audio": "files/Audio/", "Video": "files/Video/"}
 
 
+# ---- app overview: messages per app (model field / column "Source") with first and last timestamp
+# messages without a Source get this label by type; timestamps outside the range are ignored
+NO_SOURCE = {"SMS": "SMS", "MMS": "MMS", "Email": "Email"}
+UNKNOWN_APP = "(unknown app)"
+TS_MIN_YEAR = 1990  # earlier timestamps are placeholders (0001-01-01, 1970-01-01), not real messages
+TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:[.,]\d+)?\s*(Z|[+-]\d\d(?::?\d\d)?)?")
+
+
+def parse_ts(text):
+    """ISO / PostgreSQL timestamp -> aware UTC datetime, or None (naive = UTC)."""
+    import datetime as dt
+    m = TS_RE.search(text or "")
+    if not m:
+        return None
+    y, mo, d, h, mi, s, tz = m.groups()
+    try:
+        t = dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+    if tz and tz != "Z":
+        sign = -1 if tz[0] == "-" else 1
+        hh, mm = int(tz[1:3]), int(tz.replace(":", "")[3:5] or 0)
+        t -= sign * dt.timedelta(hours=hh, minutes=mm)
+    now = dt.datetime.now(dt.timezone.utc)
+    if t.year < TS_MIN_YEAR or t > now + dt.timedelta(days=1):
+        return None
+    return t
+
+
+def add_app(apps, ext, app, ts):
+    """apps: {(extraction id, app): [count, first, last]}"""
+    a = apps.setdefault((ext, app), [0, None, None])
+    a[0] += 1
+    if ts is not None:
+        a[1] = ts if a[1] is None or ts < a[1] else a[1]
+        a[2] = ts if a[2] is None or ts > a[2] else a[2]
+
+
+def merge_apps(apps):
+    """{(ext, app): [n, first, last]} -> {app: [n, first, last]}, sorted by count."""
+    out = {}
+    for (_, app), (n, first, last) in apps.items():
+        a = out.setdefault(app, [0, None, None])
+        a[0] += n
+        a[1] = min(filter(None, (a[1], first)), default=None)
+        a[2] = max(filter(None, (a[2], last)), default=None)
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1][0], kv[0].lower())))
+
+
+def period(apps):
+    """(first, last) message timestamp over all apps."""
+    return (min((a[1] for a in apps.values() if a[1]), default=None),
+            max((a[2] for a in apps.values() if a[2]), default=None))
+
+
+def fmt_ts(t, time=True):
+    return t.strftime("%Y-%m-%d %H:%M" if time else "%Y-%m-%d") if t else "-"
+
+
+def fmt_period(first, last, time=True):
+    return f"{fmt_ts(first, time)} – {fmt_ts(last, time)}" if first or last else ""
+
+
+def fmt_apps(apps, top=None):
+    items = list(apps.items())
+    more = len(items) - top if top and len(items) > top else 0
+    s = " · ".join(f"{app} {a[0]:,}" for app, a in items[:top] if a[0])
+    return s + (f" · +{more} more" if more else "")
+
+
 def file_counts(names):
     return Counter({c: sum(1 for n in names if n.startswith(prefix) and not n.endswith("/"))
                     for c, prefix in FILE_CATS.items()})
@@ -89,8 +160,12 @@ def tag(elem):
 CHUNK = 4 << 20
 # header (sourceExtractions, metadata) ends where the big sections start
 BODY_START = re.compile(rb"<(?:taggedFiles|decodedData)\b")
-# body scan: CDATA is matched (and ignored) so chat text like "<model" inside it is not counted
-BODY_TAG = re.compile(rb"<!\[CDATA\[.*?\]\]>|<(/?)(modelType|model|extractionInfo)\b([^>]*)>", re.S)
+# body scan: CDATA is matched (and ignored) so chat text like "<model" inside it is not counted;
+# the Source / TimeStamp fields (app overview) are matched including their value
+BODY_TAG = re.compile(rb"<!\[CDATA\[.*?\]\]>|<(/?)(modelType|model|extractionInfo)\b([^>]*)>"
+                      rb'|<field\b[^>]*?\bname="(Source|TimeStamp)"[^>]*?(?<!/)>\s*'
+                      rb"(?:<value\b[^>]*>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</value>)?", re.S)
+OPEN_FIELD = re.compile(rb'<field\b[^>]*?\bname="(?:Source|TimeStamp)"|<field\b[^>]*$')  # (maybe) a wanted field
 ATTR = re.compile(rb'([\w:.-]+)="([^"]*)"')
 
 
@@ -119,18 +194,46 @@ def _parse_header(data, extractions):
             section = None
 
 
+class _Open:
+    """An open <model> element during the report.xml scan."""
+    __slots__ = ("ext", "mtype", "msg", "source", "ts", "orphans")
+
+    def __init__(self, ext, mtype, msg):
+        self.ext, self.mtype, self.msg = ext, mtype, msg  # msg: counted message -> app overview
+        self.source = self.ts = None
+        self.orphans = []  # (ext, type, ts) of nested messages without own Source: take this model's
+
+
+def _close_model(m, parent, apps):
+    """Add a closed model's message (and nested messages without Source) to the app overview."""
+    pending = m.orphans + ([(m.ext, m.mtype, m.ts)] if m.msg else [])
+    if not pending:
+        return
+    if m.source:
+        for ext, _, ts in pending:
+            add_app(apps, ext, m.source, ts)
+    elif parent is not None:
+        parent.orphans += pending
+    else:
+        for ext, mtype, ts in pending:
+            add_app(apps, ext, NO_SOURCE.get(mtype, UNKNOWN_APP), ts)
+
+
 def parse_xml(fh, quick=False):
-    """Stream report.xml. Returns (extractions, Counter{(extraction id, model type): n}).
+    """Stream report.xml. Returns (extractions, Counter{(extraction id, model type): n}, apps).
 
     The header is parsed with ElementTree; the (huge) rest is scanned with a regex for
     <model> tags, which is several times faster. Counts top-level models (direct
     children of <modelType>) plus messages (NESTED_COUNTED) nested in Chats; a message
     listed both in its chat and at top level (same id) is counted once.
+    apps: {(extraction id, app): [messages, first, last]} from the messages' Source and
+    TimeStamp fields; a message without Source takes that of its chat.
     quick: stop after the header (extractions only, no counts).
     """
     extractions = {}  # id -> dict
     counts = Counter()
-    ext_stack = []  # (extraction id, model type) of the open <model> elements
+    apps = {}
+    ext_stack = []  # _Open of the open <model> elements
     seen = set()  # hashes of counted message ids: report.xml lists chat messages also at top level
     header, rest, tail = b"", b"", b""
     in_body = False
@@ -149,20 +252,39 @@ def parse_xml(fh, quick=False):
                 break
             _parse_header(header[:m.start()], extractions)
             if quick:
-                return list(extractions.values()), counts
+                return list(extractions.values()), counts, apps
             chunk, header = header[m.start():], b""
-        if not chunk:
+        final = not chunk
+        if final and not rest:
             break
         data = rest + chunk
-        # cut before an incomplete tag or an unterminated CDATA section at the chunk end
-        cut = data.rfind(b"<")
-        cdata = data.rfind(b"<![CDATA[")
-        if cdata > data.rfind(b"]]>"):
-            cut = min(cut, cdata)
-        data, rest = data[:cut], data[cut:]
+        if final:  # end of file: scan what is left
+            rest = b""
+        else:
+            # cut before an incomplete tag, an unterminated CDATA section or an open <field> at the chunk end
+            cut = data.rfind(b"<")
+            cdata = data.rfind(b"<![CDATA[")
+            if cdata > data.rfind(b"]]>"):
+                cut = min(cut, cdata)
+            field = data.rfind(b"<field ")
+            if field > data.rfind(b"</field>") and OPEN_FIELD.match(data, field):
+                end = data.find(b">", field)
+                if end < 0 or data[end - 1:end] != b"/":  # not a self-closing <field ... />
+                    cut = min(cut, field)
+            data, rest = data[:cut], data[cut:]
         tail = (tail + data)[-64:]
         for m in BODY_TAG.finditer(data):
-            close, name, raw = m.groups()
+            close, name, raw, fname, cdata_val, text_val = m.groups()
+            if fname is not None:
+                top = ext_stack[-1] if ext_stack else None
+                if top is not None and (top.msg or fname == b"Source"):
+                    val = (cdata_val if cdata_val is not None else text_val or b"").decode("utf-8", "replace")
+                    if fname == b"Source":
+                        from html import unescape
+                        top.source = unescape(val).strip() or None
+                    else:
+                        top.ts = parse_ts(val)
+                continue
             if name is None or name == b"modelType":
                 continue
             if name == b"extractionInfo":  # normally in the header; just in case
@@ -173,26 +295,35 @@ def parse_xml(fh, quick=False):
             if close:
                 if not ext_stack:
                     raise ValueError("report.xml not well-formed (unbalanced </model>)")
-                ext_stack.pop()
+                closed = ext_stack.pop()
+                _close_model(closed, ext_stack[-1] if ext_stack else None, apps)
                 continue
             a = _attrs(raw)
-            ext = a.get("extractionId") or (ext_stack[-1][0] if ext_stack else None)
+            parent = ext_stack[-1] if ext_stack else None
+            ext = a.get("extractionId") or (parent.ext if parent else None)
             mtype = a.get("type", "?")
-            if not ext_stack or mtype in NESTED_COUNTED:
-                if ext_stack and ext_stack[-1][1] in NESTED_COUNTED:
+            msg = False
+            if parent is None or mtype in NESTED_COUNTED:
+                if parent is not None and parent.mtype in NESTED_COUNTED:
                     mtype = "Embedded" + mtype  # message inside a message (database.db: own table)
                 mid = a.get("id")
                 if mid is None or hash(mid) not in seen:  # 64-bit hash: less memory than the ids
                     counts[(ext, mtype)] += 1
+                    msg = mtype in NESTED_COUNTED
                     if mid is not None:
                         seen.add(hash(mid))
-            if not raw.rstrip().endswith(b"/"):
-                ext_stack.append((ext, mtype))
+            model = _Open(ext, mtype, msg)
+            if raw.rstrip().endswith(b"/"):  # self-closing: no fields
+                _close_model(model, parent, apps)
+            else:
+                ext_stack.append(model)
+        if final:
+            break
 
     tail = (tail + rest).rstrip()
     if ext_stack or not tail.endswith(b">") or not re.search(rb"</(?:\w+:)?project>$", tail):
         raise ValueError("report.xml truncated or not well-formed")
-    return list(extractions.values()), counts
+    return list(extractions.values()), counts, apps
 
 
 # --------------------------------------------------------------------------- database.db (pg_dump -Fc)
@@ -309,6 +440,45 @@ class PgDump:
             yield dict(zip(table["columns"], vals))
 
 
+def _db_col(cols, *names):
+    """Index of the first column matching one of names (case-insensitive), or None."""
+    low = [c.lower() for c in cols]
+    for n in names:
+        if n.lower() in low:
+            return low.index(n.lower())
+    return None
+
+
+def _copy_text(v):
+    """Value of a COPY text column (None for NULL)."""
+    if v == b"\\N":
+        return None
+    return v.decode("utf-8", "replace").replace("\\t", "\t").replace("\\n", " ").replace("\\\\", "\\")
+
+
+def count_messages(dump, t, counts, apps):
+    """Count a message table per extraction and per app (columns Source, TimeStamp).
+
+    Returns False if the table has no Source column (no app overview possible).
+    """
+    cols = t["columns"]
+    ext_i = cols.index("SourceExtraction")
+    src_i = _db_col(cols, "Source")
+    ts_i = _db_col(cols, "TimeStamp", "Timestamp", "DateSent", "DateTime")
+    mtype = t["name"][:-1] if t["name"][:-1] in CATEGORIES["Messages"] else t["name"]
+    rows = Counter()
+    for line in dump.lines(t):
+        vals = line.split(b"\t")
+        ext = vals[ext_i].decode("ascii", "replace")
+        rows[ext] += 1
+        source = _copy_text(vals[src_i]) if src_i is not None else None
+        ts = parse_ts(_copy_text(vals[ts_i])) if ts_i is not None else None
+        add_app(apps, ext, (source or "").strip() or NO_SOURCE.get(mtype, UNKNOWN_APP), ts)
+    for ext, n in rows.items():
+        counts[(ext, t["name"])] += n
+    return src_i is not None or not rows or mtype in NO_SOURCE
+
+
 def count_models(dump, t, counts):
     """Count top-level decoded models of a table per extraction into counts.
 
@@ -317,9 +487,9 @@ def count_models(dump, t, counts):
     '...DtoId' column are sub-models (e.g. Locations of a Journey) and are skipped -
     except messages, which always belong to a chat.
     """
-    cols = t["columns"]
-    if not {"DecodingConfidence", "ModelLabels", "SourceExtraction"} <= set(cols) or "_" in t["name"]:
+    if not is_model_table(t):
         return
+    cols = t["columns"]
     name = t["name"]
     # messages belong to a chat (parent column) but are counted anyway
     parent_i = [] if category(name) == "Messages" else [i for i, c in enumerate(cols) if c.endswith("DtoId")]
@@ -337,13 +507,18 @@ def count_models(dump, t, counts):
         counts[(ext.decode("ascii", "replace"), name)] += n
 
 
-def parse_db(fh, quick=False):
-    """Read database.db. Returns (extractions, Counter{(extraction id, table): n}).
+def is_model_table(t):
+    return {"DecodingConfidence", "ModelLabels", "SourceExtraction"} <= set(t["columns"]) and "_" not in t["name"]
 
+
+def parse_db(fh, quick=False):
+    """Read database.db. Returns (extractions, Counter{(extraction id, table): n}, apps).
+
+    apps: as in parse_xml; None if a message table has no Source column.
     quick: read only the ExtractionInfos table (no counts).
     """
     dump = PgDump(fh)
-    extractions, counts = [], Counter()
+    extractions, counts, apps, apps_ok = [], Counter(), {}, True
     for t in dump.tables():
         if t["name"] == "ExtractionInfos":
             for r in dump.rows(t):
@@ -353,9 +528,13 @@ def parse_db(fh, quick=False):
                 })
             if quick:
                 break
-        elif not quick:
+        elif quick:
+            continue
+        elif is_model_table(t) and category(t["name"]) == "Messages":
+            apps_ok &= count_messages(dump, t, counts, apps)
+        else:
             count_models(dump, t, counts)
-    return extractions, counts
+    return extractions, counts, (apps if apps_ok else None)
 
 
 # --------------------------------------------------------------------------- check + rating
@@ -422,8 +601,8 @@ def evaluate(r, min_items=MIN_ITEMS):
 
 def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False):
     """Check one UFDR. quick: extractions only (no content counts, much faster)."""
-    res = {"file": str(path), "source": "", "quick": quick, "errors": [], "warnings": [],
-           "extractions": [], "models": Counter(), "cats": cat_counts({}), "files": Counter()}
+    res = {"file": str(path), "source": "", "quick": quick, "errors": [], "warnings": [], "notes": [],
+           "extractions": [], "models": Counter(), "cats": cat_counts({}), "files": Counter(), "apps": {}}
     try:
         with zipfile.ZipFile(path) as zf:
             names = set(zf.namelist())
@@ -442,7 +621,7 @@ def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False):
             else:
                 try:
                     with zf.open(member) as fh:
-                        exs, counts = (parse_xml if source == "xml" else parse_db)(fh, quick)
+                        exs, counts, apps = (parse_xml if source == "xml" else parse_db)(fh, quick)
                 except (ValueError, IndexError, zlib.error) as e:
                     if not (auto and source == "db" and XML_NAME in names):
                         raise
@@ -451,7 +630,11 @@ def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False):
                     source = res["source"] = "xml"
                     member = XML_NAME
                     with zf.open(member) as fh:
-                        exs, counts = parse_xml(fh, quick)
+                        exs, counts, apps = parse_xml(fh, quick)
+                if not quick:
+                    res["apps"] = merge_apps(apps) if apps is not None else None
+                    if apps is None:
+                        res["notes"].append("app overview: database.db has no Source column - use source xml")
                 for e in exs:
                     models = Counter({m: n for (x, m), n in counts.items() if x == e.get("id")})
                     res["extractions"].append({"id": e.get("id"), "label": describe(e), "sim": is_sim(e),
@@ -526,6 +709,15 @@ def format_result(r, full=True):
         if not r.get("quick"):
             out.append(f"    Content: {fmt_cats(r['cats'])}")
         out.append(f"    Files:   {fmt_files(r['files'])}")
+        out += [f"    Note:    {n}" for n in r.get("notes", [])]
+        apps = r.get("apps")
+        if apps:
+            first, last = period(apps)
+            out.append(f"    Messages from {fmt_ts(first)} to {fmt_ts(last)} (UTC)")
+            out.append("    Apps (messages, first – last message, UTC):")
+            width = max(map(len, apps))
+            for app, (n, f, l) in apps.items():
+                out.append(f"      {app:<{width}} {n:>10,}   {fmt_period(f, l)}".rstrip())
         if full and r["models"]:
             out.append("    All item types:")
             for k, v in sorted(r["models"].items(), key=lambda kv: (-kv[1], kv[0])):
@@ -552,16 +744,22 @@ def write_csv(results, path, case=""):
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:  # BOM: Excel opens UTF-8 correctly
         w = csv.writer(fh, delimiter=";")
         w.writerow(["case", "file", "light", "reasons", "source", "extraction_count", "extractions",
-                    "sim_count", *CATEGORIES, *(f"{c.lower()}_files" for c in FILE_CATS), *model_keys])
+                    "sim_count", *CATEGORIES, *(f"{c.lower()}_files" for c in FILE_CATS),
+                    "first_message_utc", "last_message_utc", "apps", *model_keys])
         for r in results:
             q = r.get("quick")
             exs = [e["label"] + (" [SIM]" if e["sim"] else "") + ("" if q else f" ({fmt_cats(e['cats'])})")
                    for e in r["extractions"]]
+            apps = r.get("apps") or {}
+            first, last = period(apps)
+            app_text = " | ".join(f"{app} {n}" + (f" ({fmt_period(f, l)})" if f else "")
+                                  for app, (n, f, l) in apps.items())
             w.writerow([
                 case, r["file"], LIGHT_NAMES[r["light"]], " | ".join(t for _, t in r["reasons"]), r["source"],
                 len(r["extractions"]), " | ".join(exs), sum(e["sim"] for e in r["extractions"]),
                 *(("" if q else r["cats"][c]) for c in CATEGORIES),
                 *((r["files"][c] if r["ok"] else "") for c in FILE_CATS),
+                fmt_ts(first) if first else "", fmt_ts(last) if last else "", app_text,
                 *(("" if q else r["models"].get(k, 0)) for k in model_keys),
             ])
 
@@ -594,6 +792,7 @@ tr.g td{background:var(--gbg)}tr.y td{background:var(--ybg)}tr.r td{background:v
 tr.g .light{color:var(--g)}tr.y .light{color:var(--y)}tr.r .light{color:var(--r)}
 .path{color:var(--muted);font-size:12px;word-break:break-all}
 ul.reasons{margin:0;padding-left:18px}
+td.apps{font-size:13px;min-width:160px}
 details{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;background:var(--card)}
 details>summary{cursor:pointer;padding:10px 14px;font-weight:600}
 details>div{padding:0 14px 14px}
@@ -636,6 +835,8 @@ def write_html(results, path, case="", settings=None):
             f"<td class='n'>{num(sum(x['sim'] for x in r['extractions']))}</td>"
             + "".join(f"<td class='n'>{cnum(c[k])}</td>" for k in CONTENT_CATS)
             + "".join(f"<td class='n'>{num(r['files'][k])}</td>" for k in FILE_CATS)
+            + f"<td class='n'>{e(fmt_period(*period(r.get('apps') or {}), time=False))}</td>"
+            + f"<td class='apps'>{e(fmt_apps(r.get('apps') or {}, top=3))}</td>"
             + f"<td>{reasons_html(r)}</td></tr>")
 
     details = []
@@ -643,6 +844,15 @@ def write_html(results, path, case="", settings=None):
         body = [f"<p class='path'>{e(r['file'])} · source: {e(r['source'] or '-')}</p>", reasons_html(r)]
         if r["ok"]:
             body.append(f"<p>Files in UFDR: {e(fmt_files(r['files']))}</p>")
+            body += [f"<p class='path'>{e(n)}</p>" for n in r.get("notes", [])]
+        if r["ok"] and r.get("apps"):
+            first, last = period(r["apps"])
+            body.append(f"<h3>Apps</h3><p>Messages from <b>{e(fmt_ts(first))}</b> to <b>{e(fmt_ts(last))}</b> (UTC)</p>"
+                        "<div class='scroll'><table><tr><th>App</th><th class='n'>Messages</th>"
+                        "<th class='n'>First message (UTC)</th><th class='n'>Last message (UTC)</th></tr>"
+                        + "".join(f"<tr><td>{e(app)}</td><td class='n'>{n:,}</td><td class='n'>{e(fmt_ts(f))}</td>"
+                                  f"<td class='n'>{e(fmt_ts(l))}</td></tr>" for app, (n, f, l) in r["apps"].items())
+                        + "</table></div>")
         if r["ok"] and r.get("quick"):
             body.append("<h3>Extractions</h3><ul>" + "".join(
                 f"<li>{e(x['label'])}{' <span class=sim>SIM</span>' if x['sim'] else ''}</li>"
@@ -682,7 +892,7 @@ def write_html(results, path, case="", settings=None):
 <span class="chip g">● GO: {n[GREEN]}</span><span class="chip y">● CHECK: {n[YELLOW]}</span>
 <span class="chip r">● STOP: {n[RED]}</span></div></section>
 <section class="card"><h2>Results</h2><div class="scroll"><table>
-<tr><th>Light</th><th>File</th><th class="n">Extr.</th><th class="n">SIM</th>{''.join(f"<th class='n'>{k}</th>" for k in CONTENT_CATS)}{''.join(f"<th class='n'>{k}</th>" for k in FILE_CATS)}<th>Reasons</th></tr>
+<tr><th>Light</th><th>File</th><th class="n">Extr.</th><th class="n">SIM</th>{''.join(f"<th class='n'>{k}</th>" for k in CONTENT_CATS)}{''.join(f"<th class='n'>{k}</th>" for k in FILE_CATS)}<th class="n">Messages from – to</th><th>Apps (top 3)</th><th>Reasons</th></tr>
 {''.join(rows)}
 </table></div></section>
 <section><h2>Details</h2>{''.join(details)}</section>
@@ -738,7 +948,7 @@ def run_gui():
     def px(n):
         return int(round(n * scale))
 
-    w, h = min(px(1040), int(root.winfo_screenwidth() * 0.9)), min(px(780), int(root.winfo_screenheight() * 0.9))
+    w, h = min(px(1280), int(root.winfo_screenwidth() * 0.9)), min(px(780), int(root.winfo_screenheight() * 0.9))
     root.geometry(f"{w}x{h}")
     root.minsize(min(px(780), w), min(px(560), h))
     for name in ("TkTextFont", "TkHeadingFont", "TkMenuFont"):
@@ -917,7 +1127,9 @@ def run_gui():
     cols = (("light", "Light", 95, "w"), ("file", "File", 240, "w"), ("ext", "Extr.", 55, "center"),
             ("sim", "SIM", 45, "center"), ("msg", "Messages", 85, "center"), ("con", "Contacts", 80, "center"),
             ("loc", "Locations", 85, "center"), ("call", "Calls", 70, "center"),
-            ("aud", "Audio", 65, "center"), ("vid", "Video", 65, "center"), ("note", "Reasons", 300, "w"))
+            ("aud", "Audio", 65, "center"), ("vid", "Video", 65, "center"),
+            ("period", "Messages from – to", 170, "center"), ("apps", "Apps (top 3)", 230, "w"),
+            ("note", "Reasons", 300, "w"))
     tree = ttk.Treeview(tframe, columns=[c[0] for c in cols], show="headings", selectmode="browse", height=7)
     for cid, title, width, anchor in cols:
         tree.heading(cid, text=title, anchor=anchor)
@@ -928,9 +1140,13 @@ def run_gui():
         tree.tag_configure(f"L{lvl}", background=bg, foreground=fg)
         tree.tag_configure(f"L{lvl}s", background=sel_bg, foreground=sel_fg, font=bold)
     tsb = ttk.Scrollbar(tframe, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=tsb.set)
-    tree.pack(side="left", fill="both", expand=True)
-    tsb.pack(side="right", fill="y")
+    hsb = ttk.Scrollbar(tframe, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=tsb.set, xscrollcommand=hsb.set)
+    tframe.rowconfigure(0, weight=1)
+    tframe.columnconfigure(0, weight=1)
+    tree.grid(row=0, column=0, sticky="nsew")
+    tsb.grid(row=0, column=1, sticky="ns")
+    hsb.grid(row=1, column=0, sticky="ew")
     pane.add(tframe, weight=3)
 
     dframe = ttk.Frame(pane, style="Card.TFrame")
@@ -972,7 +1188,8 @@ def run_gui():
             light, Path(r["file"]).name,
             len(r["extractions"]) if ok else "", sum(e["sim"] for e in r["extractions"]) if ok else "",
             *((("–" if r.get("quick") else f"{cats[c]:,}") if ok else "") for c in CONTENT_CATS),
-            *((f"{r['files'][c]:,}" if ok else "") for c in FILE_CATS), note))
+            *((f"{r['files'][c]:,}" if ok else "") for c in FILE_CATS),
+            fmt_period(*period(r.get("apps") or {}), time=False), fmt_apps(r.get("apps") or {}, top=3), note))
 
     # ---- run
     def worker(files, n_jobs, **kw):

@@ -31,27 +31,69 @@ def extraction(i, name, etype, device):
     return {"id": str(i), "name": name, "type": etype, "device": device}
 
 
+def source_xml(app):
+    return f'<field name="Source" type="String"><value type="String"><![CDATA[{app}]]></value></field>'
+
+
+def ts_xml(day):
+    """TimeStamp field: 2021-01-01 10:00 +01:00 plus day days; day None: placeholder 0001-01-01 (ignored)."""
+    if day is None:
+        value = "0001-01-01T00:00:00.000+00:00"
+    else:
+        value = f"2021-{1 + day // 28:02d}-{1 + day % 28:02d}T10:00:00.000+01:00"
+    return (f'<field name="TimeStamp" type="TimeStamp"><value type="TimeStamp" format="TimeStampKnown" '
+            f'formattedTimestamp="x">{value}</value></field>')
+
+
 def models_xml(models):
-    """models: list of (type, extraction id, count). Chat -> 1 chat with count messages."""
+    """models: list of (type, extraction id, count[, app]).
+
+    Chat -> 1 chat with count messages (message k on day k) of app:
+      "App"   Source on every message, before the messages ("WhatsApp")
+      "App*"  Source only on the chat, after the messages: messages inherit it ("Signal*")
+    The first message of each chat is also listed at top level (same id, as in real reports),
+    the last one has a placeholder timestamp (0001-01-01, ignored).
+    SMS/MMS/Email: TimeStamp on day k, Source only if app is given.
+    """
     by_type = {}
-    for mtype, ext, n in models:
-        by_type.setdefault(mtype, []).append((ext, n))
-    out = []
+    for mtype, ext, n, *app in models:
+        by_type.setdefault(mtype, []).append((ext, n, app[0] if app else None))
+    out, top_level = [], []
     for mtype, entries in by_type.items():
         out.append(f'<modelType type="{mtype}">')
-        for ext, n in entries:
+        for ext, n, app in entries:
             if mtype == "Chat":
-                msgs = "".join(
-                    f'<model type="InstantMessage" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
-                    f'<field name="Body" type="String"><value type="String"><![CDATA[message {k}]]></value></field>'
-                    f'</model>' for k in range(n))
+                app = app or "WhatsApp"
+                inherit = app.endswith("*")
+                app = app.rstrip("*")
+                msgs = []
+                for k in range(n):
+                    m = (f'<model type="InstantMessage" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
+                         + ("" if inherit else source_xml(app))
+                         + ts_xml(k if k < n - 1 or n == 1 else None)
+                         + f'<field name="Body" type="String"><value type="String"><![CDATA[message {k} '
+                           f'<field name="Source">fake</field>]]></value></field>'
+                         + '<field name="Status" type="String" />'
+                         + f'<modelField name="From" type="Party"><model type="Party" id="{uid()}" '
+                           f'deleted_state="Intact">{ts_xml(300)}</model></modelField>'
+                         + '</model>')
+                    msgs.append(m)
+                if msgs:
+                    top_level.append(msgs[0])
                 out.append(f'<model type="Chat" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
-                           f'<multiModelField name="Messages" type="InstantMessage">{msgs}</multiModelField></model>')
+                           + ("" if inherit else source_xml(app))
+                           + f'<multiModelField name="Messages" type="InstantMessage">{"".join(msgs)}'
+                           f'</multiModelField>' + (source_xml(app) if inherit else "") + '</model>')
+            elif mtype in ("SMS", "MMS", "Email"):
+                out += [f'<model type="{mtype}" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
+                        + (source_xml(app) if app else "") + ts_xml(k) + '</model>' for k in range(n)]
             else:
                 out += [f'<model type="{mtype}" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
                         f'<field name="Name" type="String"><value type="String"><![CDATA[{mtype} {k}]]></value>'
                         f'</field></model>' for k in range(n)]
         out.append("</modelType>")
+    if top_level:
+        out.append('<modelType type="InstantMessage">' + "".join(top_level) + "</modelType>")
     return "".join(out)
 
 
@@ -71,7 +113,18 @@ def report_xml(extractions, models):
 
 
 PHONE = extraction(0, "File System", "FileSystem", "Test Phone")
-CONTENT = [("Contact", "0", 40), ("Chat", "0", 25), ("SMS", "0", 10), ("Location", "0", 15), ("Call", "0", 30)]
+CONTENT = [("Contact", "0", 40), ("Chat", "0", 15, "WhatsApp"), ("Chat", "0", 10, "Signal*"), ("SMS", "0", 10),
+           ("Location", "0", 15), ("Call", "0", 30)]
+
+# expected app overview (CSV columns apps / first_message_utc / last_message_utc), times in UTC:
+# WhatsApp days 0-13 (last message: placeholder), Signal days 0-8, SMS days 0-9
+EXPECT_APPS = {
+    "green_phone.ufdr": ("WhatsApp 15 (2021-01-01 09:00 – 2021-01-14 09:00) | "
+                         "Signal 10 (2021-01-01 09:00 – 2021-01-09 09:00) | "
+                         "SMS 10 (2021-01-01 09:00 – 2021-01-10 09:00)",
+                         "2021-01-01 09:00", "2021-01-14 09:00"),
+    "yellow_empty_device.ufdr": ("", "", ""),
+}
 
 CASES = {
     # --- green
@@ -131,6 +184,13 @@ def check(csv_path):
         ok = got == want
         expected_ok &= ok
         print(f"{'OK  ' if ok else 'FAIL'} {name:<40} expected {want:<6} got {got}")
+        if name in EXPECT_APPS:
+            want_apps = EXPECT_APPS[name]
+            got_apps = (row["apps"], row["first_message_utc"], row["last_message_utc"])
+            ok = got_apps == want_apps
+            expected_ok &= ok
+            print(f"{'OK  ' if ok else 'FAIL'} {name:<40} apps" + ("" if ok else f"\n       expected {want_apps}"
+                                                                         f"\n       got      {got_apps}"))
     sys.exit(0 if expected_ok else 1)
 
 

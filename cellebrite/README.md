@@ -22,6 +22,13 @@ Definitions:
 - **Audio / Video files**: number of files in the UFDR under `files/Audio/` and `files/Video/`, i.e.
   exactly Cellebrite's own file categorization, taken over as is (no own logic; it can include
   cache/system files such as `.exo` or `.tts`). Per UFDR, not per extraction; not part of the rating.
+- **Apps**: messages (category Messages) per app with the first and last message, plus the period
+  of all messages (first – last), per UFDR; not part of the rating. The app is Cellebrite's `Source`
+  of the message (e.g. `WhatsApp`, `Signal Private Messenger`, `Native Messages`, `Gmail`); a chat
+  message without its own Source takes that of its chat, SMS/MMS/Email without Source are listed as
+  `SMS`/`MMS`/`Email`, anything else as `(unknown app)`. Times are the message `TimeStamp` in UTC;
+  timestamps before 1990 (placeholders such as `0001-01-01`) or in the future are ignored, so an app can
+  have messages but no period. Not available in quick mode.
 
 Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEGORIES`,
 `CONTENT_CATS`, `SIM_DATA_CATS`) and `evaluate()`.
@@ -53,7 +60,8 @@ Exit code: 0 all green, 1 at least one yellow, 2 at least one red.
 
 Start without arguments (or with `--gui`): drop UFDR files and/or folders onto the window (or add
 them via the buttons), press **Run**. The table shows the light, extractions, SIM, messages, contacts,
-locations and the reasons; a click on a row shows the details (per extraction, all item types).
+locations, calls, audio/video files, the message period, the top 3 apps and the reasons; a click on a
+row shows the details (per extraction, apps with first/last message, all item types).
 After a run the worst UFDR is selected. An optional **case number** can be entered; it is used in
 the exports and suggested in the file name. **Save HTML report…** writes a single printable HTML file
 (case number, date, settings, overview, results table, details per UFDR); **Save CSV…** exports
@@ -102,6 +110,9 @@ Counts differ slightly between the sources:
   messages are listed separately as `EmbeddedInstantMessage(s)` and are not counted as messages.
 
 - XML uses Cellebrite's model names (`Contact`, `Call`), the DB its table names (`Contacts`, `Calls`).
+- Apps: XML from the `Source` / `TimeStamp` fields of the messages, DB from the `Source` / `TimeStamp`
+  columns of the message tables (stored without time zone, in UTC; checked against the XML of a real
+  Pixel UFDR: same first/last times, counts differ only as the message counts do).
 - The XML only contains what was exported into the report; the DB contains the full project
   data. Counts from the DB can therefore be higher (seen e.g. for `DeviceConnectivities`).
 
