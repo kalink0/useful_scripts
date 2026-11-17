@@ -59,7 +59,7 @@ jobs:
       - name: Test (built executable against generated test UFDRs)
         run: |
           python tests/make_test_ufdrs.py testdata
-          ./${{ matrix.exe }} testdata --csv testdata/result.csv || true   # exit code = worst light
+          ./${{ matrix.exe }} testdata --csv testdata/result.csv --passwords-dir testdata/passwords || true   # exit code = worst light
           python tests/make_test_ufdrs.py --check testdata/result.csv
 
       - uses: actions/upload-artifact@v4

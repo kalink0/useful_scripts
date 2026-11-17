@@ -30,6 +30,21 @@ Definitions:
   timestamps before 1990 (placeholders such as `0001-01-01`) or in the future are ignored, so an app can
   have messages but no period. Not available in quick mode.
 
+- **Passwords** (optional, `-p` / GUI checkbox *Export passwords*): writes per UFDR
+  `<ufdr>_passwords.txt` (unique passwords, one per line, UTF-8, e.g. as a wordlist) and
+  `<ufdr>_passwords_context.csv` (kind, type, source, account, service, server, label, SSID, password,
+  excluded, extraction, deleted state; `;` separated). Same data source as the check (DB if present,
+  otherwise report.xml). Exported are Cellebrite's `Password` items of type `Default` (password
+  managers, saved passwords, app PINs) and `Secret` (e.g. iOS keychain), plus WiFi passwords
+  (`WirelessNetwork`); not `Key` / `Token` (account keys, OAuth / web tokens). Binary and empty values
+  are skipped. Readable values that are no passwords are **excluded** from the list but kept in the
+  context CSV with the reason in `excluded`: `longer than 64`, `uuid`, `hex` (32+ hex digits: hashes /
+  keys; not for WiFi, where 64 hex digits are the WPA key), `json`, `xml`, `url`, `jwt`.
+  These rules come from the length x shape of all values in 7 real UFDRs: saved passwords and WiFi
+  keys were all <= 64 characters; the iOS keychain held thousands of UUIDs. Digits (PINs) and other
+  short values stay in, so the list is a good wordlist but not a clean one. The reports (screen, CSV,
+  HTML) only show the numbers, never the passwords. Not part of the rating.
+
 Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEGORIES`,
 `CONTENT_CATS`, `SIM_DATA_CATS`) and `evaluate()`.
 
@@ -39,6 +54,7 @@ Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEG
 python3 sauce.py                     # GUI
 python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [-q] [-j N] [--source auto|xml|db]
                       [--min-items N] [--case NO] [--csv out.csv] [--html report.html]
+                      [-p] [--passwords-dir DIR]
 
   -r, --recursive   search subfolders of given folders too
   -s, --summary     also list all item types with counts
@@ -52,6 +68,8 @@ python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [-q] [-j N] [-
   --case NO         optional case number, shown in CSV and HTML
   --csv FILE        also write results as CSV (; separated, opens in Excel)
   --html FILE       also write an HTML report (single file, printable)
+  -p, --passwords   export passwords per UFDR (see Passwords above), next to the UFDR
+  --passwords-dir DIR  write the password files to DIR instead (implies -p)
 ```
 
 Exit code: 0 all green, 1 at least one yellow, 2 at least one red.
@@ -60,12 +78,13 @@ Exit code: 0 all green, 1 at least one yellow, 2 at least one red.
 
 Start without arguments (or with `--gui`): drop UFDR files and/or folders onto the window (or add
 them via the buttons), press **Run**. The table shows the light, extractions, SIM, messages, contacts,
-locations, calls, audio/video files, the message period, the top 3 apps and the reasons; a click on a
-row shows the details (per extraction, apps with first/last message, all item types).
+locations, calls, audio/video files and the reasons; a click on a row shows the details (per
+extraction, message period, apps with first/last message, all item types).
 After a run the worst UFDR is selected. An optional **case number** can be entered; it is used in
 the exports and suggested in the file name. **Save HTML report…** writes a single printable HTML file
 (case number, date, settings, overview, results table, details per UFDR); **Save CSV…** exports
-everything for Excel.
+everything for Excel. With **Export passwords (asks for target folder)** checked, **Run** first asks
+for the folder for the password files (cancel: nothing is run).
 
 Uses tkinter (part of Python; on Debian/Ubuntu `apt install python3-tk`).
 Drag & drop needs the optional package `tkinterdnd2` (`pip install -r requirements.txt`); it is bundled
@@ -113,6 +132,9 @@ Counts differ slightly between the sources:
 - Apps: XML from the `Source` / `TimeStamp` fields of the messages, DB from the `Source` / `TimeStamp`
   columns of the message tables (stored without time zone, in UTC; checked against the XML of a real
   Pixel UFDR: same first/last times, counts differ only as the message counts do).
+- Passwords: XML values are mostly Base64 (decoded), the DB stores them decoded; NUL bytes are
+  written as `~!!~` in the DB and converted back. Checked on 7 real UFDRs: identical password lists
+  from both sources (order may differ).
 - The XML only contains what was exported into the report; the DB contains the full project
   data. Counts from the DB can therefore be higher (seen e.g. for `DeviceConnectivities`).
 
@@ -125,7 +147,7 @@ expected light (`green_`, `yellow_`, `red_`):
 
 ```
 python3 tests/make_test_ufdrs.py testdata              # create the test UFDRs
-python3 sauce.py testdata --csv testdata/result.csv    # run SAUCE (or open the folder in the GUI)
+python3 sauce.py testdata --csv testdata/result.csv --passwords-dir testdata/passwords   # run SAUCE
 python3 tests/make_test_ufdrs.py --check testdata/result.csv
 ```
 

@@ -4,8 +4,8 @@
 The file name starts with the expected light (green_/yellow_/red_).
 
   python3 make_test_ufdrs.py OUTDIR            create the test UFDRs
-  python3 sauce.py OUTDIR --csv result.csv     run SAUCE on them
-  python3 make_test_ufdrs.py --check result.csv  compare the lights with the expectation
+  python3 sauce.py OUTDIR --csv OUTDIR/result.csv --passwords-dir OUTDIR/passwords   run SAUCE on them
+  python3 make_test_ufdrs.py --check OUTDIR/result.csv  compare the lights (and passwords) with the expectation
 
 The report.xml follows the structure of real Cellebrite reports (namespace, sourceExtractions,
 "Extraction Data" metadata, decodedData/modelType/model with extractionId, chats with nested
@@ -97,7 +97,49 @@ def models_xml(models):
     return "".join(out)
 
 
-def report_xml(extractions, models):
+def _pw_field(name, value, b64=False):
+    import base64
+    if b64:
+        value = base64.b64encode(value if isinstance(value, bytes) else value.encode()).decode()
+    fmt = ' format="Base64String"' if b64 else ""
+    return f'<field name="{name}" type="String"><value type="String"{fmt}><![CDATA[{value}]]></value></field>'
+
+
+# (Type, Data, base64?) - fake values; exported: Default/Secret, printable, <= 64 chars, unique
+PASSWORDS = [
+    ("Default", "fake-pass-1", True),
+    ("Default", "fake pass 2 äöü", False),
+    ("Secret", "fake-secret-3", True),
+    ("Default", "fake-pass-1", True),          # duplicate: once in the list
+    ("Key", "fake-key-not-exported", True),
+    ("Token", "fake-token-not-exported", True),
+    ("Secret", b"\x00\x01binary", True),       # binary: not exported
+    ("Secret", "x" * 65, True),               # too long: not exported
+    ("Secret", "0a1b2c3d-0000-4000-8000-00000000abcd", True),   # uuid
+    ("Secret", "ab12" * 8, True),                                # hex >= 32: hash / key
+    ("Secret", '{"fake": 1}', True),                             # json
+    ("Secret", "https://example.org/x", True),                   # url
+    ("Secret", "eyJhbGciOiJub25lIn0.eyJmYWtlIjoxfQ.", True),     # jwt
+    ("Secret", "1234", True),                                    # digits (PIN): exported
+]
+WIFI = [("FakeNet", "fake-wifi-4"), ("OpenNet", None), ("HexNet", "cd34" * 16)]  # 64 hex digits: WPA key, exported
+EXPECT_PASSWORDS = {"green_phone.ufdr": ["fake-pass-1", "fake pass 2 äöü", "fake-secret-3", "1234", "fake-wifi-4",
+                                         "cd34" * 16]}
+EXPECT_EXCLUDED = {"green_phone.ufdr": ["longer than 64", "uuid", "hex", "json", "url", "jwt"]}
+
+
+def passwords_xml(ext="0"):
+    pw = "".join(f'<model type="Password" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
+                 + _pw_field("Source", "Test App") + _pw_field("Account", "fake@example.org")
+                 + _pw_field("Data", data, b64) + f'<field name="Type" type="PasswordType"><value type="PasswordType">'
+                 f'<![CDATA[{typ}]]></value></field></model>' for typ, data, b64 in PASSWORDS)
+    wifi = "".join(f'<model type="WirelessNetwork" id="{uid()}" deleted_state="Intact" extractionId="{ext}">'
+                   + _pw_field("SSId", ssid) + (_pw_field("Password", p) if p else "") + "</model>"
+                   for ssid, p in WIFI)
+    return f'<modelType type="Password">{pw}</modelType><modelType type="WirelessNetwork">{wifi}</modelType>'
+
+
+def report_xml(extractions, models, extra=""):
     exs = "".join(
         f'<extractionInfo id="{e["id"]}" name="{e["name"]}" isCustomName="False" type="{e["type"]}" '
         f'deviceName="{e["device"]}" fullName="{e["device"]}" index="{e["id"]}" IsPartialData="False" />'
@@ -109,7 +151,7 @@ def report_xml(extractions, models):
             f'<project id="{uid()}" name="Test" reportVersion="8.5" extractionType="{extractions[0]["type"] if extractions else ""}" '
             f'xmlns="{NS}"><sourceExtractions>{exs}</sourceExtractions>'
             f'<metadata section="Extraction Data">{meta}</metadata>'
-            f'<decodedData>{models_xml(models)}</decodedData></project>')
+            f'<decodedData>{models_xml(models)}{extra}</decodedData></project>')
 
 
 PHONE = extraction(0, "File System", "FileSystem", "Test Phone")
@@ -152,7 +194,7 @@ def create(outdir):
     out.mkdir(parents=True, exist_ok=True)
     for name, (exs, models) in CASES.items():
         with zipfile.ZipFile(out / f"{name}.ufdr", "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr("report.xml", report_xml(exs, models))
+            z.writestr("report.xml", report_xml(exs, models, passwords_xml() if name == "green_phone" else ""))
     # warning: database.json lists more extractions than report.xml
     with zipfile.ZipFile(out / "yellow_database_json_mismatch.ufdr", "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("report.xml", report_xml([PHONE], CONTENT))
@@ -191,6 +233,18 @@ def check(csv_path):
             expected_ok &= ok
             print(f"{'OK  ' if ok else 'FAIL'} {name:<40} apps" + ("" if ok else f"\n       expected {want_apps}"
                                                                          f"\n       got      {got_apps}"))
+        pw_file = Path(csv_path).parent / "passwords" / (Path(name).stem + "_passwords.txt")
+        if name in EXPECT_PASSWORDS and pw_file.exists():  # only if run with --passwords-dir <csv dir>/passwords
+            got_pw = pw_file.read_text(encoding="utf-8").splitlines()
+            ctx = pw_file.with_name(pw_file.stem + "_context.csv")
+            with open(ctx, encoding="utf-8-sig") as fh:
+                excluded = [r["excluded"] for r in csv.DictReader(fh, delimiter=";") if r["excluded"]]
+            ok = (got_pw == EXPECT_PASSWORDS[name] and row["passwords_exported"] == str(len(got_pw))
+                  and excluded == EXPECT_EXCLUDED[name])
+            expected_ok &= ok
+            print(f"{'OK  ' if ok else 'FAIL'} {name:<40} passwords" + (
+                "" if ok else f"\n       expected {EXPECT_PASSWORDS[name]} excluded {EXPECT_EXCLUDED[name]}"
+                              f"\n       got      {got_pw} excluded {excluded}"))
     sys.exit(0 if expected_ok else 1)
 
 
