@@ -46,6 +46,13 @@ jobs:
           python -c "import tkinter"
           python -m pip install --upgrade pip pyinstaller -r requirements.txt
 
+      # VERSION in sauce.py: tag sauce-v1.4 -> "v1.4", other builds "dev-<commit>"; fails if not replaced
+      - name: Set version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/sauce-v* ]]; then v="${GITHUB_REF_NAME#sauce-}"; else v="dev-${GITHUB_SHA::7}"; fi
+          python -c "import re,sys; p='sauce.py'; s=open(p,encoding='utf-8').read(); n=re.sub(r'^VERSION = \"dev\"', 'VERSION = \"%s\"' % sys.argv[1], s, count=1, flags=re.M); assert n != s, 'VERSION line not found'; open(p,'w',encoding='utf-8',newline='').write(n)" "$v"
+          grep -n '^VERSION = ' sauce.py
+
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -59,7 +66,8 @@ jobs:
       - name: Test (built executable against generated test UFDRs)
         run: |
           python tests/make_test_ufdrs.py testdata
-          ./${{ matrix.exe }} testdata --csv testdata/result.csv --passwords-dir testdata/passwords || true   # exit code = worst light
+          ./${{ matrix.exe }} --version
+          ./${{ matrix.exe }} testdata --csv testdata/result.csv -p -a --export-dir testdata/exports || true   # exit code = worst light
           python tests/make_test_ufdrs.py --check testdata/result.csv
 
       - uses: actions/upload-artifact@v4

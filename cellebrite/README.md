@@ -19,9 +19,14 @@ Definitions:
 - **Hardly any content**: messages, contacts, locations and calls are each below `--min-items` (default 5).
 - Categories: Messages = InstantMessage, SMS, MMS, Email (incl. chat messages) · Contacts = Contact ·
   Locations = Location, Journey · Calls = Call.
-- **Audio / Video files**: number of files in the UFDR under `files/Audio/` and `files/Video/`, i.e.
-  exactly Cellebrite's own file categorization, taken over as is (no own logic; it can include
-  cache/system files such as `.exo` or `.tts`). Per UFDR, not per extraction; not part of the rating.
+- **More**: further figures from the item counts – Chats (`Chat`), Accounts (`UserAccount`), Installed
+  apps (`InstalledApplication`), Web history (`VisitedPage`), WiFi networks (`WirelessNetwork`). Per UFDR;
+  not part of the rating. Not available in quick mode. Constant `FACTS`.
+- **Files**: number and size of the files in the UFDR per category under `files/<category>/` (e.g.
+  `Image`, `Audio`, `Video`, `Document`, `Database`, `Application`), i.e. exactly Cellebrite's own file
+  categorization, taken over as is (no own logic; it can include cache/system files such as `.exo` or
+  `.tts`). The overview shows the total and Audio / Video (`FILE_CATS`), the details (`-s`, GUI, HTML)
+  and the CSV all categories. Per UFDR, not per extraction; not part of the rating.
 - **Apps**: messages (category Messages) per app with the first and last message, plus the period
   of all messages (first – last), per UFDR; not part of the rating. The app is Cellebrite's `Source`
   of the message (e.g. `WhatsApp`, `Signal Private Messenger`, `Native Messages`, `Gmail`); a chat
@@ -30,7 +35,7 @@ Definitions:
   timestamps before 1990 (placeholders such as `0001-01-01`) or in the future are ignored, so an app can
   have messages but no period. Not available in quick mode.
 
-- **Passwords** (optional, `-p` / GUI checkbox *Export passwords*): writes per UFDR
+- **Passwords** (optional, `-p` / GUI checkbox *Export: Passwords*): writes per UFDR
   `<ufdr>_passwords.txt` (unique passwords, one per line, UTF-8, e.g. as a wordlist) and
   `<ufdr>_passwords_context.csv` (kind, type, source, account, service, server, label, SSID, password,
   excluded, extraction, deleted state; `;` separated). Same data source as the check (DB if present,
@@ -45,8 +50,19 @@ Definitions:
   short values stay in, so the list is a good wordlist but not a clean one. The reports (screen, CSV,
   HTML) only show the numbers, never the passwords. Not part of the rating.
 
+- **Accounts** (optional, `-a` / GUI checkbox *Export: Accounts*): writes per UFDR `<ufdr>_accounts.csv`
+  (`;` separated) with all `UserAccount` items: source (app), service, name, username, email, phone,
+  user id, server, created (UTC), extraction, deleted state. Email / phone / user id come from the
+  account's contact entries (several: ` | ` separated; profile pictures are not exported). Same data
+  source as the check. Also accounts nested in another account (report.xml `RelatedModels`, typically the
+  Android system account of an app) – database.db has them as own rows, so both sources give the same
+  list (checked on a real Pixel UFDR: 92 accounts, identical). The account's password is not exported
+  here. Not part of the rating.
+
+`-p` and `-a` write next to the UFDR, or into `--export-dir DIR`; the GUI asks for the folder once.
+
 Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEGORIES`,
-`CONTENT_CATS`, `SIM_DATA_CATS`) and `evaluate()`.
+`CONTENT_CATS`, `SIM_DATA_CATS`, `FACTS`, `FILE_CATS`) and `evaluate()`.
 
 ## Usage
 
@@ -54,10 +70,10 @@ Rules and categories are constants at the top of `sauce.py` (`MIN_ITEMS`, `CATEG
 python3 sauce.py                     # GUI
 python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [-q] [-j N] [--source auto|xml|db]
                       [--min-items N] [--case NO] [--csv out.csv] [--html report.html]
-                      [-p] [--passwords-dir DIR]
+                      [-p] [-a] [--export-dir DIR]
 
   -r, --recursive   search subfolders of given folders too
-  -s, --summary     also list all item types with counts
+  -s, --summary     also list all item types and all file categories with counts
   -v, --verify      verify ZIP integrity: read every member and check its CRC (slow)
   -q, --quick       only count extractions and detect SIMs (seconds instead of minutes);
                     no content counts, so an empty SIM is only YELLOW and a truncated
@@ -66,10 +82,13 @@ python3 sauce.py <ufdr|folder> [<ufdr|folder> ...] [-r] [-s] [-v] [-q] [-j N] [-
   --source          auto (default): DbData/database.db if present (much faster), otherwise report.xml
   --min-items N     threshold for "hardly any content" (default 5)
   --case NO         optional case number, shown in CSV and HTML
-  --csv FILE        also write results as CSV (; separated, opens in Excel)
+  --csv FILE        also write results as CSV (; separated, opens in Excel), plus FILE_apps.csv
+                    (one row per UFDR and app: messages, first / last message)
   --html FILE       also write an HTML report (single file, printable)
   -p, --passwords   export passwords per UFDR (see Passwords above), next to the UFDR
-  --passwords-dir DIR  write the password files to DIR instead (implies -p)
+  -a, --accounts    export user accounts per UFDR (see Accounts above), next to the UFDR
+  --export-dir DIR  write the export files of -p / -a to DIR instead
+                    (the former --passwords-dir DIR still works, = -p --export-dir DIR)
 ```
 
 Exit code: 0 all green, 1 at least one yellow, 2 at least one red.
@@ -79,12 +98,14 @@ Exit code: 0 all green, 1 at least one yellow, 2 at least one red.
 Start without arguments (or with `--gui`): drop UFDR files and/or folders onto the window (or add
 them via the buttons), press **Run**. The table shows the light, extractions, SIM, messages, contacts,
 locations, calls, audio/video files and the reasons; a click on a row shows the details (per
-extraction, message period, apps with first/last message, all item types).
+extraction, more figures, files per category, message period, apps with first/last message, all item
+types).
 After a run the worst UFDR is selected. An optional **case number** can be entered; it is used in
 the exports and suggested in the file name. **Save HTML report…** writes a single printable HTML file
 (case number, date, settings, overview, results table, details per UFDR); **Save CSV…** exports
-everything for Excel. With **Export passwords (asks for target folder)** checked, **Run** first asks
-for the folder for the password files (cancel: nothing is run).
+everything for Excel (plus `<name>_apps.csv`). With **Export: Passwords** and/or **Accounts** checked,
+**Run** first asks for the folder for the export files (cancel: nothing is run); after the run,
+**Open export folder** opens it in the file manager.
 
 Uses tkinter (part of Python; on Debian/Ubuntu `apt install python3-tk`).
 Drag & drop needs the optional package `tkinterdnd2` (`pip install -r requirements.txt`); it is bundled
@@ -102,6 +123,11 @@ Prebuilt executables are created by the GitHub Action `.github/workflows/sauce.y
 | `sauce_gui.exe` | Windows | GUI, no console window |
 | `sauce.exe` | Windows | CLI (starts the GUI without arguments) |
 | `sauce` / `sauce-linux` | Linux | GUI without arguments, CLI with arguments |
+
+Version: the workflow writes it into `VERSION` in `sauce.py` before building – tag `sauce-v1.4` gives
+`v1.4`, any other build `dev-<commit>`; running from source or a local build shows `dev`. It is shown
+in the GUI title and header, the HTML report (header, settings, footer), the CSV (`sauce_version`) and
+by `--version`.
 
 Local build (PyInstaller cannot cross-compile, build on the target OS):
 `build_exe.bat` (Windows) or `./build_exe.sh` (Linux). Output in `dist/`.
@@ -135,6 +161,9 @@ Counts differ slightly between the sources:
 - Passwords: XML values are mostly Base64 (decoded), the DB stores them decoded; NUL bytes are
   written as `~!!~` in the DB and converted back. Checked on 7 real UFDRs: identical password lists
   from both sources (order may differ).
+- Accounts: the XML count (*More*) only includes top-level `UserAccount`s, the DB count also the
+  accounts nested in another one (real Pixel UFDR: 72 vs. 92). The account export contains all of
+  them from both sources.
 - The XML only contains what was exported into the report; the DB contains the full project
   data. Counts from the DB can therefore be higher (seen e.g. for `DeviceConnectivities`).
 
@@ -147,7 +176,7 @@ expected light (`green_`, `yellow_`, `red_`):
 
 ```
 python3 tests/make_test_ufdrs.py testdata              # create the test UFDRs
-python3 sauce.py testdata --csv testdata/result.csv --passwords-dir testdata/passwords   # run SAUCE
+python3 sauce.py testdata --csv testdata/result.csv -p -a --export-dir testdata/exports   # run SAUCE
 python3 tests/make_test_ufdrs.py --check testdata/result.csv
 ```
 

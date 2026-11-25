@@ -9,7 +9,9 @@ Licenses are counted per extraction, so for every UFDR it checks:
   - SIM extractions, and whether they contain any data (empty SIMs only cost a license)
   - content per extraction: messages, contacts, locations, calls (+ all item types)
   - apps: messages per app with first / last message (information only, not rated)
+  - more figures and the files per category (information only, not rated)
   - optional (--passwords): export of passwords (Default/Secret) and WiFi passwords as a list
+  - optional (--accounts): export of the user accounts as CSV
 and rates it:
   RED     defective UFDR, empty SIM extraction, >= 3 extractions
   YELLOW  2 extractions, SIM extraction with data, hardly any content, other warnings
@@ -26,7 +28,7 @@ Only the standard library is used (GUI: tkinter, drag & drop: optional tkinterdn
 Usage:
   sauce.py                         start the GUI
   sauce.py <ufdr|folder> ... [-r] [-s] [-v] [-q] [-j N] [--source auto|xml|db] [--min-items N]
-                                        [--case NO] [--csv FILE] [--html FILE] [-p] [--passwords-dir DIR]
+                                        [--case NO] [--csv FILE] [--html FILE] [-p] [-a] [--export-dir DIR]
 """
 import argparse
 import csv
@@ -38,6 +40,8 @@ import zlib
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
+
+VERSION = "dev"  # set by the build workflow: tag sauce-v1.4 -> "v1.4", other builds "dev-<commit>"
 
 # "SIM" not touching other letters: "SIM Card", "EXTRACTION_SIM", "USIM" - but not "SIMPLE"
 SIM_RE = re.compile(r"(?<![a-z])U?SIM(?![a-z])", re.IGNORECASE)
@@ -61,9 +65,14 @@ CONTENT_CATS = ("Messages", "Contacts", "Locations", "Calls")  # "hardly any con
 SIM_DATA_CATS = ("Messages", "Contacts", "Calls")     # a SIM extraction with none of these is "empty"
 
 
-# media files in the UFDR, counted from the ZIP directory: Cellebrite's own categorization
-# (files/<category>/) is taken over as is, deliberately without own logic (e.g. no extension filter)
-FILE_CATS = {"Audio": "files/Audio/", "Video": "files/Video/"}
+# more figures for the overview, from the item counts (information only, not rated)
+FACTS = {"Chats": {"Chat"}, "Accounts": {"UserAccount"}, "Installed apps": {"InstalledApplication"},
+         "Web history": {"VisitedPage"}, "WiFi networks": {"WirelessNetwork"}}
+
+# files in the UFDR, counted from the ZIP directory: Cellebrite's own categorization
+# (files/<category>/) is taken over as is, deliberately without own logic (e.g. no extension filter);
+# all categories in the details, these also as own columns in the results tables
+FILE_CATS = ("Audio", "Video")
 
 
 # ---- app overview: messages per app (model field / column "Source") with first and last timestamp
@@ -136,20 +145,53 @@ def fmt_apps(apps, top=None):
     return s + (f" · +{more} more" if more else "")
 
 
-def file_counts(names):
-    return Counter({c: sum(1 for n in names if n.startswith(prefix) and not n.endswith("/"))
-                    for c, prefix in FILE_CATS.items()})
+def file_stats(infos):
+    """{category: [files, bytes]} of the files under files/<category>/, most files first."""
+    out = {}
+    for i in infos:
+        parts = i.filename.split("/", 2)
+        if len(parts) == 3 and parts[0] == "files" and not i.is_dir():
+            s = out.setdefault(parts[1], [0, 0])
+            s[0] += 1
+            s[1] += i.file_size
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1][0], kv[0])))
+
+
+def n_files(files, cat):
+    return files.get(cat, (0, 0))[0]
+
+
+def fmt_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} TB"
 
 
 def fmt_files(files):
-    return " · ".join(f"{c} {files[c]:,}" for c in FILE_CATS)
+    """Total plus the FILE_CATS: '41,145 (22.8 GB) · Audio 493 · Video 437'."""
+    total = sum(n for n, _ in files.values()), sum(s for _, s in files.values())
+    return " · ".join([f"{total[0]:,} ({fmt_size(total[1])})"] + [f"{c} {n_files(files, c):,}" for c in FILE_CATS])
+
+
+def _is_type(model_type, types):
+    return model_type in types or model_type[:-1] in types  # database.db table names: Contacts -> Contact
 
 
 def category(model_type):
     for cat, types in CATEGORIES.items():
-        if model_type in types or model_type[:-1] in types:  # Contacts -> Contact
+        if _is_type(model_type, types):
             return cat
     return None
+
+
+def fact_counts(models):
+    return Counter({f: sum(n for m, n in models.items() if _is_type(m, types)) for f, types in FACTS.items()})
+
+
+def fmt_facts(facts):
+    return " · ".join(f"{f} {facts[f]:,}" for f in FACTS)
 
 
 # --------------------------------------------------------------------------- report.xml
@@ -557,10 +599,19 @@ PW_NOT_PASSWORD = (  # (reason, pattern); "hex" does not apply to WiFi (64 hex d
     ("hex", re.compile(r"[0-9a-fA-F]{32,}")),
 )
 DB_NUL = b"~!!~"  # NUL byte in database.db (checked: same count as NUL bytes in report.xml)
-DB_DELETED = {"1": "Intact"}  # Deleted column -> report.xml deleted_state (other values: as is)
-PW_SECTION = re.compile(rb'<modelType\b[^>]*\btype="(Password|WirelessNetwork)"')
+DB_DELETED = {"0": "Unknown", "1": "Intact"}  # Deleted column -> report.xml deleted_state (others: as is)
 PW_COLUMNS = ("kind", "type", "source", "account", "service", "server", "label", "ssid", "password",
               "excluded", "extraction", "deleted")
+
+# account export: UserAccount models / UserAccounts table, with the account's contact entries
+# (ContactEntry Domain -> column; others, e.g. profile pictures, are not exported)
+ACC_COLUMNS = ("source", "service", "name", "username", "email", "phone", "user_id", "server", "created_utc",
+               "extraction", "deleted")
+ACC_ENTRIES = {"Email": "email", "Phone": "phone", "User ID": "user_id"}
+
+# what each export reads: report.xml <modelType> sections, database.db tables
+EXPORT_XML = {"passwords": ("Password", "WirelessNetwork"), "accounts": ("UserAccount",)}
+EXPORT_DB = {"passwords": ("Passwords", "WirelessNetworks"), "accounts": ("UserAccounts", "ContactEntries")}
 _COPY_ESC = re.compile(rb"\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|(.))", re.S)
 _COPY_CHR = {b"b": b"\b", b"f": b"\f", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"v": b"\v"}
 
@@ -606,18 +657,35 @@ def _pw_record(kind, typ, f, raw, extraction, deleted):
             "deleted": deleted or ""}
 
 
-def _xml_sections(fh):
-    """Yield (model type, bytes) of the Password and WirelessNetwork <modelType> sections."""
+def _text(v):
+    return v.decode("utf-8", "replace") if v is not None else ""
+
+
+def _acc_record(f, entries, extraction, deleted):
+    """f(name) -> field text; entries: [(domain, value)] of the account's contact entries."""
+    t = parse_ts(f("TimeCreated"))
+    rec = {"source": f("Source"), "service": f("ServiceType") or f("ServiceIdentifier"), "name": f("Name"),
+           "username": f("Username"), "server": f("ServerAddress"),
+           "created_utc": t.strftime("%Y-%m-%d %H:%M:%S") if t else "", "extraction": extraction or "",
+           "deleted": deleted or ""}
+    for col in ACC_ENTRIES.values():
+        rec[col] = " | ".join(sorted({v for d, v in entries if ACC_ENTRIES.get(d) == col and v}))
+    return rec
+
+
+def _xml_sections(fh, types):
+    """Yield (model type, bytes) of the <modelType> sections of the given model types."""
+    start = re.compile(rb'<modelType\b[^>]*\btype="(' + b"|".join(re.escape(t.encode()) for t in types) + rb')"')
     end_tag = b"</modelType>"
     buf, cur, parts, found = b"", None, [], set()
-    while len(found) < 2:
+    while len(found) < len(types):
         chunk = fh.read(CHUNK)
         if not chunk:
             break
         buf += chunk
         while True:
             if cur is None:
-                m = PW_SECTION.search(buf)
+                m = start.search(buf)
                 if not m:
                     buf = buf[-128:]  # a start tag may be cut at the chunk end
                     break
@@ -635,60 +703,96 @@ def _xml_sections(fh):
             cur = None
 
 
-def passwords_xml(fh):
-    """Password records from report.xml (Base64 values are decoded)."""
+def _xml_fields(model):
+    """{name: raw bytes} of a model's own <field>s (Base64 values decoded)."""
     import base64
-    out = []
-    for mtype, section in _xml_sections(fh):
-        for model in ET.fromstring(section):
-            if tag(model) != "model":
-                continue
-            fields = {}  # name -> raw bytes (top-level fields only)
-            for field in model:
-                value = next((c for c in field if tag(c) == "value"), None) if tag(field) == "field" else None
-                if value is None:
-                    continue
-                raw = (value.text or "").encode("utf-8")
-                if "base64" in value.get("format", "").lower():
-                    try:
-                        raw = base64.b64decode(raw, validate=False)
-                    except ValueError:
-                        raw = None
-                fields[field.get("name")] = raw
+    fields = {}
+    for field in model:
+        value = next((c for c in field if tag(c) == "value"), None) if tag(field) == "field" else None
+        if value is None:
+            continue
+        raw = (value.text or "").encode("utf-8")
+        if "base64" in value.get("format", "").lower():
+            try:
+                raw = base64.b64decode(raw, validate=False)
+            except ValueError:
+                raw = None
+        fields[field.get("name")] = raw
+    return fields
 
-            def f(name):
-                v = fields.get(name)
-                return v.decode("utf-8", "replace") if v is not None else ""
 
-            if mtype == "Password":
-                typ, value = f("Type"), fields.get("Data")
-                if typ not in PW_TYPES:
-                    continue
-            else:
-                typ, value = f("SecurityMode"), fields.get("Password")
-            rec = _pw_record("WiFi" if mtype == "WirelessNetwork" else "Password", typ, f, value,
-                             model.get("extractionId"), model.get("deleted_state"))
-            if rec:
-                out.append(rec)
+def _pw_xml(mtype, model):
+    fields = _xml_fields(model)
+
+    def f(name):
+        return _text(fields.get(name))
+
+    if mtype == "Password":
+        typ, value = f("Type"), fields.get("Data")
+        if typ not in PW_TYPES:
+            return None
+    else:
+        typ, value = f("SecurityMode"), fields.get("Password")
+    return _pw_record("WiFi" if mtype == "WirelessNetwork" else "Password", typ, f, value,
+                      model.get("extractionId"), model.get("deleted_state"))
+
+
+def _acc_xml(model):
+    fields = _xml_fields(model)
+    entries = []
+    for mf in model:
+        if tag(mf) == "multiModelField" and mf.get("name") == "Entries":
+            for sub in mf:
+                if tag(sub) == "model":
+                    sf = _xml_fields(sub)
+                    entries.append((_text(sf.get("Domain")), _text(sf.get("Value")).strip()))
+    return _acc_record(lambda name: _text(fields.get(name)), entries, model.get("extractionId"),
+                       model.get("deleted_state"))
+
+
+def exports_xml(fh, kinds):
+    """{kind: [records]} for kinds out of EXPORT_XML, from report.xml in one pass.
+
+    Accounts: also those nested in another account (RelatedModels; database.db: own rows).
+    """
+    kind_of = {t: k for k in kinds for t in EXPORT_XML[k]}
+    out = {k: [] for k in kinds}
+    for mtype, section in _xml_sections(fh, kind_of):
+        root = ET.fromstring(section)
+        if kind_of[mtype] == "accounts":
+            models = [m for m in root.iter() if m is not root and tag(m) == "model" and m.get("type") == mtype]
+            out["accounts"] += [_acc_xml(m) for m in models]
+        else:
+            out["passwords"] += filter(None, (_pw_xml(mtype, m) for m in root if tag(m) == "model"))
     return out
 
 
-def passwords_db(fh):
-    """Password records from database.db (tables Passwords, WirelessNetworks)."""
+def exports_db(fh, kinds):
+    """{kind: [records]} for kinds out of EXPORT_DB, from database.db in one pass."""
     dump = PgDump(fh)
-    out = []
+    kind_of = {t: k for k in kinds for t in EXPORT_DB[k]}
+    out = {k: [] for k in kinds}
+    accounts, entries = [], {}  # entries: account id -> [(domain, value)]
     for t in dump.tables():
-        if t["name"] not in ("Passwords", "WirelessNetworks"):
+        name = t["name"]
+        if name not in kind_of:
             continue
         cols = t["columns"]
         for line in dump.lines(t):
             row = {c: (None if v == b"\\N" else copy_unescape(v)) for c, v in zip(cols, line.split(b"\t"))}
 
-            def f(name):
-                v = row.get(name)
-                return v.decode("utf-8", "replace") if v is not None else ""
+            def f(col):
+                return _text(row.get(col))
 
-            if t["name"] == "Passwords":
+            deleted = DB_DELETED.get(f("Deleted"), f("Deleted"))
+            if name == "ContactEntries":
+                if row.get("UserAccountDtoId"):
+                    entries.setdefault(f("UserAccountDtoId"), []).append((f("Domain"), f("Value").strip()))
+                continue
+            if name == "UserAccounts":
+                accounts.append((row, deleted))
+                continue
+            if name == "Passwords":
                 typ, value = DB_PW_TYPES.get(f("Type"), f("Type")), row.get("Data")
                 if typ not in PW_TYPES:
                     continue
@@ -696,12 +800,34 @@ def passwords_db(fh):
                 typ, value = f("SecurityMode"), row.get("Password")
             if value is not None:  # PostgreSQL text cannot hold NUL: Cellebrite writes it as DB_NUL
                 value = value.replace(DB_NUL, b"\0")
-            deleted = f("Deleted")
-            rec = _pw_record("WiFi" if t["name"] == "WirelessNetworks" else "Password", typ, f, value,
-                             f("SourceExtraction"), DB_DELETED.get(deleted, deleted))
+            rec = _pw_record("WiFi" if name == "WirelessNetworks" else "Password", typ, f, value,
+                             f("SourceExtraction"), deleted)
             if rec:
-                out.append(rec)
+                out["passwords"].append(rec)
+    for row, deleted in accounts:  # after the loop: ContactEntries may come after UserAccounts in the dump
+        acc_id = _text(row.get("Id"))
+        out["accounts"].append(_acc_record(lambda col, row=row: _text(row.get(col)), entries.get(acc_id, []),
+                                           _text(row.get("SourceExtraction")), deleted))
     return out
+
+
+def _export_file(ufdr, out_dir, suffix):
+    out_dir = Path(out_dir) if out_dir else Path(ufdr).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / f"{Path(ufdr).stem}_{suffix}"
+
+
+def _write_rows(path, columns, records):
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:  # BOM: Excel opens UTF-8 correctly
+        w = csv.writer(fh, delimiter=";")
+        w.writerow(columns)
+        w.writerows([r[c] for c in columns] for r in records)
+
+
+def _label_extractions(records, extractions):
+    """Show the extraction label instead of the id."""
+    for r in records:
+        r["extraction"] = (extractions or {}).get(r["extraction"], r["extraction"])
 
 
 def write_passwords(records, ufdr, out_dir=None, extractions=None):
@@ -710,22 +836,23 @@ def write_passwords(records, ufdr, out_dir=None, extractions=None):
 
     extractions: {extraction id: label} - the context shows the label instead of the id.
     """
-    for r in records:
-        r["extraction"] = (extractions or {}).get(r["extraction"], r["extraction"])
-    out_dir = Path(out_dir) if out_dir else Path(ufdr).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(ufdr).stem
-    txt, ctx = out_dir / f"{stem}_passwords.txt", out_dir / f"{stem}_passwords_context.csv"
+    _label_extractions(records, extractions)
+    txt, ctx = _export_file(ufdr, out_dir, "passwords.txt"), _export_file(ufdr, out_dir, "passwords_context.csv")
     kept = [r for r in records if not r["excluded"]]
     unique = list(dict.fromkeys(r["password"] for r in kept))
     with open(txt, "w", encoding="utf-8", newline="\n") as fh:
         fh.writelines(p + "\n" for p in unique)
-    with open(ctx, "w", newline="", encoding="utf-8-sig") as fh:  # BOM: Excel opens UTF-8 correctly
-        w = csv.writer(fh, delimiter=";")
-        w.writerow(PW_COLUMNS)
-        w.writerows([r[c] for c in PW_COLUMNS] for r in records)
+    _write_rows(ctx, PW_COLUMNS, records)
     return {"count": len(unique), "entries": len(kept), "excluded": len(records) - len(kept),
             "txt": str(txt), "csv": str(ctx)}
+
+
+def write_accounts(records, ufdr, out_dir=None, extractions=None):
+    """<ufdr>_accounts.csv, sorted by app (source) and username."""
+    _label_extractions(records, extractions)
+    path = _export_file(ufdr, out_dir, "accounts.csv")
+    _write_rows(path, ACC_COLUMNS, sorted(records, key=lambda r: (r["source"].lower(), r["username"].lower())))
+    return {"count": len(records), "csv": str(path)}
 
 
 # --------------------------------------------------------------------------- check + rating
@@ -791,19 +918,20 @@ def evaluate(r, min_items=MIN_ITEMS):
 
 
 def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False, passwords=False,
-          passwords_dir=None):
+          accounts=False, export_dir=None):
     """Check one UFDR. quick: extractions only (no content counts, much faster).
 
-    passwords: also export passwords (write_passwords) from the same source, into passwords_dir
-    (default: next to the UFDR).
+    passwords / accounts: also export them (write_passwords / write_accounts) from the same
+    source, into export_dir (default: next to the UFDR).
     """
     res = {"file": str(path), "source": "", "quick": quick, "errors": [], "warnings": [], "notes": [],
-           "extractions": [], "models": Counter(), "cats": cat_counts({}), "files": Counter(), "apps": {},
-           "passwords": None}
+           "extractions": [], "models": Counter(), "cats": cat_counts({}), "facts": fact_counts({}),
+           "files": {}, "apps": {}, "passwords": None, "accounts": None}
     try:
         with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
-            res["files"] = file_counts(names)
+            infos = zf.infolist()
+            names = {i.filename for i in infos}
+            res["files"] = file_stats(infos)
             if verify:
                 bad = zf.testzip()
                 if bad:
@@ -839,19 +967,24 @@ def check(path, verify=False, source="auto", min_items=MIN_ITEMS, quick=False, p
                 for (_, m), n in counts.items():
                     res["models"][m] += n
                 res["cats"] = cat_counts(res["models"])
+                res["facts"] = fact_counts(res["models"])
                 if DB_JSON in names:
                     ids = json.loads(zf.read(DB_JSON)).get("SourceExtractionIds") or []
                     if ids and len(ids) != len(exs):
                         res["warnings"].append(
                             f"database.json lists {len(ids)} extraction(s), {member} {len(exs)}")
-                if passwords:
+                kinds = [k for k, on in (("passwords", passwords), ("accounts", accounts)) if on]
+                if kinds:
                     try:
                         with zf.open(member) as fh:
-                            recs = (passwords_xml if source == "xml" else passwords_db)(fh)
+                            recs = (exports_xml if source == "xml" else exports_db)(fh, kinds)
                         labels = {e["id"]: e["label"] for e in res["extractions"]}
-                        res["passwords"] = write_passwords(recs, path, passwords_dir, labels)
+                        if passwords:
+                            res["passwords"] = write_passwords(recs["passwords"], path, export_dir, labels)
+                        if accounts:
+                            res["accounts"] = write_accounts(recs["accounts"], path, export_dir, labels)
                     except (OSError, ValueError, IndexError, zlib.error, ET.ParseError) as e:
-                        res["warnings"].append(f"password export failed: {type(e).__name__}: {e}")
+                        res["warnings"].append(f"export ({', '.join(kinds)}) failed: {type(e).__name__}: {e}")
     except zipfile.BadZipFile as e:
         res["errors"].append(f"not a valid ZIP: {e}")
     except ET.ParseError as e:
@@ -906,6 +1039,10 @@ def fmt_passwords(p):
             f"-> {p['txt']}")
 
 
+def fmt_accounts(a):
+    return f"{a['count']:,} -> {a['csv']}"
+
+
 def format_result(r, full=True):
     src = r["source"] + (", quick" if r.get("quick") else "")
     out = [f"[{LIGHT_NAMES[r['light']]}] {r['file']}" + (f"  (source: {src})" if r["source"] else "")]
@@ -918,9 +1055,15 @@ def format_result(r, full=True):
             out.append(f"      - {label:<{width}}    {'' if r.get('quick') else fmt_cats(e['cats'])}".rstrip())
         if not r.get("quick"):
             out.append(f"    Content: {fmt_cats(r['cats'])}")
+            out.append(f"    More:    {fmt_facts(r['facts'])}")
         out.append(f"    Files:   {fmt_files(r['files'])}")
+        if full:
+            for c, (n, size) in r["files"].items():
+                out.append(f"      {c:<30} {n:>10,} {fmt_size(size):>10}")
         if r.get("passwords"):
             out.append(f"    Passwords: {fmt_passwords(r['passwords'])}")
+        if r.get("accounts"):
+            out.append(f"    Accounts:  {fmt_accounts(r['accounts'])}")
         out += [f"    Note:    {n}" for n in r.get("notes", [])]
         apps = r.get("apps")
         if apps:
@@ -951,13 +1094,24 @@ def collect_files(paths, recursive=False):
     return list(dict.fromkeys(files)), missing  # drop duplicates, keep order
 
 
+def _col(name):
+    return re.sub(r"\W+", "_", name.lower()).strip("_")
+
+
 def write_csv(results, path, case=""):
+    """Results CSV, plus <name>_apps.csv (one row per UFDR and app) if there are apps.
+
+    Returns the written paths.
+    """
     model_keys = sorted({k for r in results for k in r["models"]})
+    file_keys = [*FILE_CATS, *sorted({k for r in results for k in r["files"]} - set(FILE_CATS))]
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:  # BOM: Excel opens UTF-8 correctly
         w = csv.writer(fh, delimiter=";")
-        w.writerow(["case", "file", "light", "reasons", "source", "extraction_count", "extractions",
-                    "sim_count", *CATEGORIES, *(f"{c.lower()}_files" for c in FILE_CATS),
-                    "first_message_utc", "last_message_utc", "apps", "passwords_exported", *model_keys])
+        w.writerow(["case", "sauce_version", "file", "light", "reasons", "source", "extraction_count", "extractions",
+                    "sim_count", *CATEGORIES, *map(_col, FACTS), "files_total", "files_bytes_total",
+                    *(f"{_col(c)}_{x}" for c in file_keys for x in ("files", "bytes")),
+                    "first_message_utc", "last_message_utc", "apps", "passwords_exported", "accounts_exported",
+                    *model_keys])
         for r in results:
             q = r.get("quick")
             exs = [e["label"] + (" [SIM]" if e["sim"] else "") + ("" if q else f" ({fmt_cats(e['cats'])})")
@@ -967,14 +1121,26 @@ def write_csv(results, path, case=""):
             app_text = " | ".join(f"{app} {n}" + (f" ({fmt_period(f, l)})" if f else "")
                                   for app, (n, f, l) in apps.items())
             w.writerow([
-                case, r["file"], LIGHT_NAMES[r["light"]], " | ".join(t for _, t in r["reasons"]), r["source"],
+                case, VERSION, r["file"], LIGHT_NAMES[r["light"]], " | ".join(t for _, t in r["reasons"]), r["source"],
                 len(r["extractions"]), " | ".join(exs), sum(e["sim"] for e in r["extractions"]),
                 *(("" if q else r["cats"][c]) for c in CATEGORIES),
-                *((r["files"][c] if r["ok"] else "") for c in FILE_CATS),
+                *(("" if q else r["facts"][f]) for f in FACTS),
+                *((sum(v[i] for v in r["files"].values()) if r["ok"] else "") for i in (0, 1)),
+                *((r["files"].get(c, (0, 0))[i] if r["ok"] else "") for c in file_keys for i in (0, 1)),
                 fmt_ts(first) if first else "", fmt_ts(last) if last else "", app_text,
                 r["passwords"]["count"] if r.get("passwords") else "",
+                r["accounts"]["count"] if r.get("accounts") else "",
                 *(("" if q else r["models"].get(k, 0)) for k in model_keys),
             ])
+    written = [str(path)]
+    apps = [{"case": case, "file": r["file"], "app": app, "messages": n, "first_message_utc": fmt_ts(f) if f else "",
+             "last_message_utc": fmt_ts(l) if l else ""}
+            for r in results for app, (n, f, l) in (r.get("apps") or {}).items()]
+    if apps:
+        apps_path = Path(path).with_name(Path(path).stem + "_apps.csv")
+        _write_rows(apps_path, tuple(apps[0]), apps)
+        written.append(str(apps_path))
+    return written
 
 
 HTML_CSS = """
@@ -1047,7 +1213,7 @@ def write_html(results, path, case="", settings=None):
             f"<td class='n'>{num(len(r['extractions']))}</td>"
             f"<td class='n'>{num(sum(x['sim'] for x in r['extractions']))}</td>"
             + "".join(f"<td class='n'>{cnum(c[k])}</td>" for k in CONTENT_CATS)
-            + "".join(f"<td class='n'>{num(r['files'][k])}</td>" for k in FILE_CATS)
+            + "".join(f"<td class='n'>{num(n_files(r['files'], k))}</td>" for k in FILE_CATS)
             + f"<td class='n'>{e(fmt_period(*period(r.get('apps') or {}), time=False))}</td>"
             + f"<td class='apps'>{e(fmt_apps(r.get('apps') or {}, top=3))}</td>"
             + f"<td>{reasons_html(r)}</td></tr>")
@@ -1056,9 +1222,15 @@ def write_html(results, path, case="", settings=None):
     for r in results:
         body = [f"<p class='path'>{e(r['file'])} · source: {e(r['source'] or '-')}</p>", reasons_html(r)]
         if r["ok"]:
-            body.append(f"<p>Files in UFDR: {e(fmt_files(r['files']))}</p>")
+            if not r.get("quick"):
+                body.append(f"<p>More: {e(fmt_facts(r['facts']))}</p>")
+            body.append(f"<h3>Files in UFDR: {e(fmt_files(r['files']))}</h3><div class='types'>" + "".join(
+                f"<div><span>{e(c)}</span><span>{n:,} · {fmt_size(size)}</span></div>"
+                for c, (n, size) in r["files"].items()) + "</div>")
             if r.get("passwords"):
                 body.append(f"<p>Passwords exported: {e(fmt_passwords(r['passwords']))}</p>")
+            if r.get("accounts"):
+                body.append(f"<p>Accounts exported: {e(fmt_accounts(r['accounts']))}</p>")
             body += [f"<p class='path'>{e(n)}</p>" for n in r.get("notes", [])]
         if r["ok"] and r.get("apps"):
             first, last = period(r["apps"])
@@ -1092,6 +1264,7 @@ def write_html(results, path, case="", settings=None):
     if case:
         meta.append(f"<dt>Case number</dt><dd class='case'>{e(case)}</dd>")
     meta.append(f"<dt>Created</dt><dd>{now}</dd>")
+    meta.append(f"<dt>SAUCE version</dt><dd>{e(VERSION)}</dd>")
     meta.append(f"<dt>UFDRs</dt><dd>{len(results)}</dd>")
     for k, v in settings.items():
         meta.append(f"<dt>{e(k)}</dt><dd>{e(str(v))}</dd>")
@@ -1100,7 +1273,7 @@ def write_html(results, path, case="", settings=None):
     doc = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(title)}</title><style>{HTML_CSS}</style></head><body>
-<header><h1>{e(title)}</h1><p>SIM And UFDR Content Evaluator · traffic light for import</p></header>
+<header><h1>{e(title)}</h1><p>SIM And UFDR Content Evaluator {e(VERSION)} · traffic light for import</p></header>
 <main>
 <section class="card"><dl class="meta">{''.join(meta)}</dl></section>
 <section class="card"><h2>Overview</h2><div class="chips">
@@ -1116,7 +1289,7 @@ def write_html(results, path, case="", settings=None):
 <li><b>CHECK</b>: 2 extractions · SIM extraction with data · hardly any content
 (messages, contacts, locations and calls each below {e(str(settings.get('Min. items', MIN_ITEMS)))}) · warnings</li>
 <li><b>GO</b>: everything else</li></ul></section>
-</main><footer>sauce · {now}</footer></body></html>
+</main><footer>sauce {e(VERSION)} · {now}</footer></body></html>
 """
     Path(path).write_text(doc, encoding="utf-8")
 
@@ -1128,6 +1301,23 @@ def footer(results):
 
 
 # --------------------------------------------------------------------------- GUI
+
+def open_folder(path):
+    """Open a folder in the system's file manager."""
+    import os
+    import subprocess
+    if sys.platform == "win32":
+        os.startfile(path)
+        return
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):  # PyInstaller: give the file manager the system libraries back
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        env.pop("LD_LIBRARY_PATH", None)
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+    subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)], env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 def run_gui():
     import queue
@@ -1152,7 +1342,7 @@ def run_gui():
         "ok": "#15803d", "ok_bg": "#eaf6ee", "bad": "#b91c1c", "bad_bg": "#fdeceb",
         "warn": "#a16207", "warn_bg": "#fff6dd",
     }
-    root.title("SAUCE")
+    root.title(f"SAUCE {VERSION}")
     root.configure(bg=C["bg"])
 
     base = tkfont.nametofont("TkDefaultFont")
@@ -1202,11 +1392,12 @@ def run_gui():
                  lightcolor=C["accent"], darkcolor=C["accent"], bordercolor="#e2e7ee", thickness=px(6))
 
     inputs, results, events = [], [], queue.Queue()
-    opt = {k: tk.BooleanVar(value=False) for k in ("recursive", "verify", "quick", "passwords")}
+    opt = {k: tk.BooleanVar(value=False) for k in ("recursive", "verify", "quick", "passwords", "accounts")}
     jobs = tk.IntVar(value=default_jobs())
     min_items = tk.IntVar(value=MIN_ITEMS)
     case_no = tk.StringVar()
     run_settings = {}
+    export_dir = []  # target folder of the last run's export (empty: no export)
     source = tk.StringVar(value="auto")
     status = tk.StringVar(value="Ready.")
 
@@ -1224,7 +1415,7 @@ def run_gui():
     head.pack(fill="x")
     tk.Label(head, text="SAUCE", bg=C["head"], fg="white",
              font=(base.actual("family"), 17, "bold")).pack(side="left", padx=(px(18), px(12)), pady=px(12))
-    tk.Label(head, text="SIM And UFDR Content Evaluator  ·  traffic light for import", bg=C["head"],
+    tk.Label(head, text=f"SIM And UFDR Content Evaluator {VERSION}  ·  traffic light for import", bg=C["head"],
              fg=C["head_sub"]).pack(side="left", pady=(px(6), 0))
 
     body = tk.Frame(root, bg=C["bg"])
@@ -1309,8 +1500,12 @@ def run_gui():
     r1.pack(fill="x", pady=(0, px(10)))
     ttk.Label(r1, text="Case number (optional)", style="Muted.TLabel").pack(side="left", padx=(0, px(8)))
     ttk.Entry(r1, textvariable=case_no, width=28).pack(side="left")
-    ttk.Checkbutton(r1, text="Export passwords (asks for target folder)",
-                    variable=opt["passwords"]).pack(side="left", padx=px(20))
+    ttk.Label(r1, text="Export", style="Muted.TLabel").pack(side="left", padx=(px(20), px(8)))
+    ttk.Checkbutton(r1, text="Passwords", variable=opt["passwords"]).pack(side="left")
+    ttk.Checkbutton(r1, text="Accounts", variable=opt["accounts"]).pack(side="left", padx=(px(10), 0))
+    ttk.Label(r1, text="(asks for target folder)", style="Muted.TLabel").pack(side="left", padx=px(8))
+    btn_open = ttk.Button(r1, text="Open export folder", state="disabled")
+    btn_open.pack(side="left")
     btn_csv = ttk.Button(r1, text="Save CSV…", state="disabled")
     btn_csv.pack(side="right")
     btn_html = ttk.Button(r1, text="Save HTML report…", state="disabled")
@@ -1404,7 +1599,7 @@ def run_gui():
             light, Path(r["file"]).name,
             len(r["extractions"]) if ok else "", sum(e["sim"] for e in r["extractions"]) if ok else "",
             *((("–" if r.get("quick") else f"{cats[c]:,}") if ok else "") for c in CONTENT_CATS),
-            *((f"{r['files'][c]:,}" if ok else "") for c in FILE_CATS), note))
+            *((f"{n_files(r['files'], c):,}" if ok else "") for c in FILE_CATS), note))
 
     # ---- run
     def worker(files, n_jobs, **kw):
@@ -1438,6 +1633,7 @@ def run_gui():
                     btn_run.configure(state="normal")
                     for b in (btn_csv, btn_html):
                         b.configure(state="normal" if results else "disabled")
+                    btn_open.configure(state="normal" if export_dir else "disabled")
                     worst = max(range(len(results)), key=lambda i: (results[i]["light"], -results[i]["idx"]),
                                 default=0)
                     first_bad = str(worst)
@@ -1462,22 +1658,25 @@ def run_gui():
         except (tk.TclError, ValueError):
             min_n = MIN_ITEMS
             min_items.set(MIN_ITEMS)
-        pw_dir = None
-        if opt["passwords"].get():
-            pw_dir = filedialog.askdirectory(title="Target folder for password lists",
-                                             initialdir=str(Path(files[0]).parent))
-            if not pw_dir:
-                status.set("Cancelled: no target folder for the password export chosen.")
+        kinds = [k for k in ("passwords", "accounts") if opt[k].get()]
+        out_dir = None
+        if kinds:
+            out_dir = filedialog.askdirectory(title=f"Target folder for the export ({', '.join(kinds)})",
+                                              initialdir=str(Path(files[0]).parent))
+            if not out_dir:
+                status.set("Cancelled: no target folder for the export chosen.")
                 return
+        export_dir[:] = [out_dir] if out_dir else []
         prog.configure(maximum=len(files), value=0)
         btn_run.configure(state="disabled")
+        btn_open.configure(state="disabled")
         btn_csv.configure(state="disabled")
         btn_html.configure(state="disabled")
         run_settings.clear()
         run_settings.update({"Source": source.get(), "Min. items": min_n,
                              "ZIP integrity verified": "yes" if opt["verify"].get() else "no",
                              "Mode": "quick (extractions only)" if opt["quick"].get() else "full",
-                             "Passwords exported": pw_dir or "no"})
+                             "Exported": f"{', '.join(kinds)} -> {out_dir}" if kinds else "no"})
         try:
             n_jobs = max(1, int(jobs.get()))
         except (tk.TclError, ValueError):
@@ -1485,7 +1684,7 @@ def run_gui():
             jobs.set(n_jobs)
         threading.Thread(target=worker, daemon=True, args=(files, n_jobs), kwargs=dict(
             verify=opt["verify"].get(), source=source.get(), min_items=min_n, quick=opt["quick"].get(),
-            passwords=bool(pw_dir), passwords_dir=pw_dir)).start()
+            passwords="passwords" in kinds, accounts="accounts" in kinds, export_dir=out_dir)).start()
         poll()
 
     def export(kind):
@@ -1500,13 +1699,23 @@ def run_gui():
         try:
             if kind == "html":
                 write_html(ordered, path, case, run_settings)
+                written = [path]
             else:
-                write_csv(ordered, path, case)
-            status.set(f"{kind.upper()} written: {path}")
+                written = write_csv(ordered, path, case)
+            status.set(f"{kind.upper()} written: {',  '.join(written)}")
         except OSError as e:
             messagebox.showerror("SAUCE", f"Could not write {kind.upper()}:\n{e}")
 
+    def open_export():
+        if not export_dir:
+            return
+        try:
+            open_folder(export_dir[0])
+        except OSError as e:
+            messagebox.showerror("SAUCE", f"Could not open the folder:\n{export_dir[0]}\n{e}")
+
     btn_run.configure(command=run)
+    btn_open.configure(command=open_export)
     btn_csv.configure(command=lambda: export("csv"))
     btn_html.configure(command=lambda: export("html"))
     root.mainloop()
@@ -1523,6 +1732,7 @@ def main():
 
     ap = argparse.ArgumentParser(description="SAUCE - SIM And UFDR Content Evaluator. Traffic light for UFDR import (integrity, extractions, SIM, content). "
                                              "Start without arguments (or with --gui) for the GUI.")
+    ap.add_argument("--version", action="version", version=f"SAUCE {VERSION}")
     ap.add_argument("paths", nargs="+", help="UFDR file(s) and/or folder(s) containing UFDRs")
     ap.add_argument("-r", "--recursive", action="store_true", help="search subfolders too")
     ap.add_argument("-s", "--summary", action="store_true", help="also list all item types with counts")
@@ -1542,10 +1752,18 @@ def main():
     ap.add_argument("-p", "--passwords", action="store_true",
                     help="export passwords (Default/Secret + WiFi) per UFDR: <ufdr>_passwords.txt (one per line) "
                          "and <ufdr>_passwords_context.csv")
-    ap.add_argument("--passwords-dir", type=Path,
-                    help="folder for the password files (default: next to the UFDR; implies --passwords)")
+    ap.add_argument("-a", "--accounts", action="store_true",
+                    help="export user accounts per UFDR: <ufdr>_accounts.csv (app, service, name, username, "
+                         "email, phone, user id, ...)")
+    ap.add_argument("--export-dir", type=Path,
+                    help="folder for the export files of -p / -a (default: next to the UFDR)")
+    ap.add_argument("--passwords-dir", type=Path, help=argparse.SUPPRESS)  # old name: -p --export-dir DIR
     args = ap.parse_args()
-    args.passwords = args.passwords or args.passwords_dir is not None
+    if args.passwords_dir:
+        args.passwords, args.export_dir = True, args.export_dir or args.passwords_dir
+    if args.export_dir and not (args.passwords or args.accounts):
+        ap.error("--export-dir needs -p and/or -a")
+    kinds = [k for k in ("passwords", "accounts") if getattr(args, k)]
 
     files, missing = collect_files(args.paths, args.recursive)
     for m in missing:
@@ -1556,20 +1774,19 @@ def main():
     results = []
     for _, r in check_all(files, args.jobs, verify=args.verify, source=args.source,
                           min_items=args.min_items, quick=args.quick, passwords=args.passwords,
-                          passwords_dir=args.passwords_dir):
+                          accounts=args.accounts, export_dir=args.export_dir):
         print("\n" + format_result(r, full=args.summary), flush=True)
         results.append(r)
     results.sort(key=lambda r: r["idx"])  # exports in input order
 
     if args.csv:
-        write_csv(results, args.csv, args.case)
-        print(f"\nCSV written: {args.csv}")
+        print(f"\nCSV written: {',  '.join(write_csv(results, args.csv, args.case))}")
     if args.html:
         write_html(results, args.html, args.case, {"Source": args.source, "Min. items": args.min_items,
                                                    "ZIP integrity verified": "yes" if args.verify else "no",
                                                    "Mode": "quick (extractions only)" if args.quick else "full",
-                                                   "Passwords exported": (str(args.passwords_dir or "next to UFDR")
-                                                                          if args.passwords else "no")})
+                                                   "Exported": (f"{', '.join(kinds)} -> "
+                                                                f"{args.export_dir or 'next to UFDR'}" if kinds else "no")})
         print(f"HTML written: {args.html}")
 
     print("\n" + footer(results))

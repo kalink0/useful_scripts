@@ -4,8 +4,8 @@
 The file name starts with the expected light (green_/yellow_/red_).
 
   python3 make_test_ufdrs.py OUTDIR            create the test UFDRs
-  python3 sauce.py OUTDIR --csv OUTDIR/result.csv --passwords-dir OUTDIR/passwords   run SAUCE on them
-  python3 make_test_ufdrs.py --check OUTDIR/result.csv  compare the lights (and passwords) with the expectation
+  python3 sauce.py OUTDIR --csv OUTDIR/result.csv -p -a --export-dir OUTDIR/exports   run SAUCE on them
+  python3 make_test_ufdrs.py --check OUTDIR/result.csv  compare the lights (figures, apps, exports) with the expectation
 
 The report.xml follows the structure of real Cellebrite reports (namespace, sourceExtractions,
 "Extraction Data" metadata, decodedData/modelType/model with extractionId, chats with nested
@@ -139,6 +139,53 @@ def passwords_xml(ext="0"):
     return f'<modelType type="Password">{pw}</modelType><modelType type="WirelessNetwork">{wifi}</modelType>'
 
 
+def _entry_xml(mtype, domain, value):
+    return (f'<model type="{mtype}" id="{uid()}" deleted_state="Intact" extractionId="0">'
+            + _pw_field("Category", "") + _pw_field("Value", value) + _pw_field("Domain", domain) + "</model>")
+
+
+def accounts_xml():
+    """2 accounts, the second with a related account nested in it (RelatedModels): 3 exported, 2 counted."""
+    related = ('<multiModelField name="RelatedModels" type="UserAccount">'
+               f'<model type="UserAccount" id="{uid()}" deleted_state="Intact" extractionId="0">'
+               + _pw_field("Source", "Accounts") + _pw_field("Username", "fake.user")
+               + _pw_field("ServiceType", "org.example.chat") + "</model></multiModelField>")
+    return ('<modelType type="UserAccount">'
+            f'<model type="UserAccount" id="{uid()}" deleted_state="Intact" extractionId="0">'
+            + _pw_field("Source", "Test Chat") + _pw_field("Name", "Fake User") + _pw_field("Username", "fake.user")
+            + '<multiModelField name="Entries" type="ContactEntry">'
+            + _entry_xml("PhoneNumber", "Phone", "+49 000 000")
+            + _entry_xml("EmailAddress", "Email", "fake@example.org")
+            + _entry_xml("UserID", "User ID", "id-2") + _entry_xml("UserID", "User ID", "id-1")
+            + _entry_xml("ProfilePicture", "Profile Picture", "https://example.org/pic.jpg")
+            + "</multiModelField>" + ts_xml(0).replace("TimeStamp\"", "TimeCreated\"", 1) + "</model>"
+            f'<model type="UserAccount" id="{uid()}" deleted_state="Deleted" extractionId="0">'
+            + _pw_field("Source", "Accounts") + _pw_field("Username", "fake@example.org")
+            + _pw_field("ServiceType", "com.example") + related + "</model></modelType>")
+
+
+# expected rows of <ufdr>_accounts.csv (sorted by source, username): source, service, name, username, email,
+# phone, user_id, created_utc, deleted
+EXPECT_ACCOUNTS = {"green_phone.ufdr": [
+    ("Accounts", "org.example.chat", "", "fake.user", "", "", "", "", "Intact"),
+    ("Accounts", "com.example", "", "fake@example.org", "", "", "", "", "Deleted"),
+    ("Test Chat", "", "Fake User", "fake.user", "fake@example.org", "+49 000 000", "id-1 | id-2",
+     "2021-01-01 09:00:00", "Intact"),
+]}
+
+# files under files/<category>/ (Cellebrite's categories): name -> size
+FILES = {"files/Image/a.jpg": 1000, "files/Image/b.png": 2500, "files/Audio/c.opus": 300, "files/Text/d.txt": 10}
+# expected columns of the results CSV (figures and files)
+EXPECT_COLUMNS = {"green_phone.ufdr": {"chats": "2", "accounts": "2", "installed_apps": "0", "wifi_networks": "3",
+                                       "files_total": "4", "files_bytes_total": "3810", "image_files": "2",
+                                       "image_bytes": "3500", "audio_files": "1", "video_files": "0",
+                                       "text_files": "1", "accounts_exported": "3"}}
+# expected rows of result_apps.csv: (file, app, messages, first, last)
+EXPECT_APP_ROWS = {"green_phone.ufdr": [("WhatsApp", "15", "2021-01-01 09:00", "2021-01-14 09:00"),
+                                        ("Signal", "10", "2021-01-01 09:00", "2021-01-09 09:00"),
+                                        ("SMS", "10", "2021-01-01 09:00", "2021-01-10 09:00")]}
+
+
 def report_xml(extractions, models, extra=""):
     exs = "".join(
         f'<extractionInfo id="{e["id"]}" name="{e["name"]}" isCustomName="False" type="{e["type"]}" '
@@ -194,7 +241,12 @@ def create(outdir):
     out.mkdir(parents=True, exist_ok=True)
     for name, (exs, models) in CASES.items():
         with zipfile.ZipFile(out / f"{name}.ufdr", "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr("report.xml", report_xml(exs, models, passwords_xml() if name == "green_phone" else ""))
+            phone = name == "green_phone"
+            z.writestr("report.xml", report_xml(exs, models, passwords_xml() + accounts_xml() if phone else ""))
+            if phone:
+                z.writestr("files/Image/", "")  # directory entry: not counted
+                for fname, size in FILES.items():
+                    z.writestr(fname, b"x" * size)
     # warning: database.json lists more extractions than report.xml
     with zipfile.ZipFile(out / "yellow_database_json_mismatch.ufdr", "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("report.xml", report_xml([PHONE], CONTENT))
@@ -213,12 +265,25 @@ def create(outdir):
         print("  " + n)
 
 
+def _rows(path):
+    with open(path, encoding="utf-8-sig") as fh:
+        return list(csv.DictReader(fh, delimiter=";"))
+
+
+def _report(ok, name, what, want, got):
+    print(f"{'OK  ' if ok else 'FAIL'} {name:<40} {what}" + ("" if ok else f"\n       expected {want}"
+                                                                       f"\n       got      {got}"))
+    return ok
+
+
 def check(csv_path):
     expected_ok = True
-    with open(csv_path, encoding="utf-8-sig") as fh:
-        rows = list(csv.DictReader(fh, delimiter=";"))
+    rows = _rows(csv_path)
     if not rows:
         sys.exit("no rows in CSV")
+    apps_csv = Path(csv_path).with_name(Path(csv_path).stem + "_apps.csv")
+    app_rows = _rows(apps_csv) if apps_csv.exists() else []
+    exports = Path(csv_path).parent / "exports"
     for row in rows:
         name = Path(row["file"]).name
         want = name.split("_", 1)[0].upper()
@@ -233,8 +298,23 @@ def check(csv_path):
             expected_ok &= ok
             print(f"{'OK  ' if ok else 'FAIL'} {name:<40} apps" + ("" if ok else f"\n       expected {want_apps}"
                                                                          f"\n       got      {got_apps}"))
-        pw_file = Path(csv_path).parent / "passwords" / (Path(name).stem + "_passwords.txt")
-        if name in EXPECT_PASSWORDS and pw_file.exists():  # only if run with --passwords-dir <csv dir>/passwords
+        if name in EXPECT_COLUMNS:
+            want = EXPECT_COLUMNS[name]
+            got = {k: row.get(k) for k in want}
+            expected_ok &= _report(got == want, name, "figures and files", want, got)
+        if name in EXPECT_APP_ROWS:
+            want = EXPECT_APP_ROWS[name]
+            got = [(r["app"], r["messages"], r["first_message_utc"], r["last_message_utc"])
+                   for r in app_rows if Path(r["file"]).name == name]
+            expected_ok &= _report(got == want, name, "apps CSV", want, got)
+        acc_file = exports / (Path(name).stem + "_accounts.csv")
+        if name in EXPECT_ACCOUNTS and acc_file.exists():  # only if run with -a --export-dir <csv dir>/exports
+            want = EXPECT_ACCOUNTS[name]
+            got = [tuple(r[c] for c in ("source", "service", "name", "username", "email", "phone", "user_id",
+                                        "created_utc", "deleted")) for r in _rows(acc_file)]
+            expected_ok &= _report(got == want, name, "accounts", want, got)
+        pw_file = exports / (Path(name).stem + "_passwords.txt")
+        if name in EXPECT_PASSWORDS and pw_file.exists():  # only if run with -p --export-dir <csv dir>/exports
             got_pw = pw_file.read_text(encoding="utf-8").splitlines()
             ctx = pw_file.with_name(pw_file.stem + "_context.csv")
             with open(ctx, encoding="utf-8-sig") as fh:
