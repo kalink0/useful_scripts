@@ -1,0 +1,2 @@
+# optional: drag & drop in the GUI (everything else uses only the standard library)
+tkinterdnd2

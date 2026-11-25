@@ -38,8 +38,8 @@ echo [2/3] Installing / checking PyInstaller...
 "%VENV_DIR%\Scripts\python.exe" -m pip install --quiet --upgrade pyinstaller -r requirements.txt || goto :error
 
 echo [3/3] Building executables...
-"%VENV_DIR%\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --name sauce_gui sauce.py || goto :error
-"%VENV_DIR%\Scripts\pyinstaller.exe" --noconfirm --onefile --console --collect-all tkinterdnd2 --name sauce sauce.py || goto :error
+"%VENV_DIR%\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --icon sauce.ico --name sauce_gui sauce.py || goto :error
+"%VENV_DIR%\Scripts\pyinstaller.exe" --noconfirm --onefile --console --collect-all tkinterdnd2 --icon sauce.ico --name sauce sauce.py || goto :error
 
 echo.
 echo  [OK] Done. Executables in: %~dp0dist

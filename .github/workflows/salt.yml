@@ -1,0 +1,111 @@
+# Build SALT executables for Windows and Linux.
+#   - every push touching crypto/ and manual runs: executables as workflow artifacts
+#   - tag "salt-v*" (e.g. salt-v1.0): additionally a GitHub release with the files
+name: salt build
+
+on:
+  push:
+    # with only "tags" set, branch pushes would not trigger the workflow at all
+    branches:
+      - "**"
+    paths:
+      - "crypto/**"
+      - ".github/workflows/salt.yml"
+    tags:
+      - "salt-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe: dist/salt.exe
+          # oldest available runner = oldest glibc = binary runs on more distributions
+          - os: ubuntu-22.04
+            exe: dist/salt
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: crypto
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: |
+          python -c "import tkinter"
+          python -m pip install --upgrade pip pyinstaller -r requirements.txt
+
+      # VERSION in salt.py: tag salt-v1.0 -> "v1.0", other builds "dev-<commit>"; fails if not replaced
+      - name: Set version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/salt-v* ]]; then v="${GITHUB_REF_NAME#salt-}"; else v="dev-${GITHUB_SHA::7}"; fi
+          python -c "import re,sys; p='salt.py'; s=open(p,encoding='utf-8').read(); n=re.sub(r'^VERSION = \"dev\"', 'VERSION = \"%s\"' % sys.argv[1], s, count=1, flags=re.M); assert n != s, 'VERSION line not found'; open(p,'w',encoding='utf-8',newline='').write(n)" "$v"
+          grep -n '^VERSION = ' salt.py
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --icon salt.ico --name salt_gui salt.py
+          pyinstaller --noconfirm --onefile --console --collect-all tkinterdnd2 --icon salt.ico --name salt salt.py
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: pyinstaller --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon salt.ico --name salt salt.py
+
+      - name: Test (built executable against generated test extractions)
+        run: |
+          python tests/make_test_data.py testdata
+          ./${{ matrix.exe }} --version
+          ./${{ matrix.exe }} testdata -r -o testdata/out -j 1 || true   # exit code 1 = found something
+          python tests/make_test_data.py --check testdata/out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: salt-${{ runner.os }}
+          path: crypto/dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/salt-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Rename Linux binary
+        run: mv artifacts/salt-Linux/salt artifacts/salt-Linux/salt-linux
+      - name: Version from tag (salt-v1.0 -> v1.0)
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#salt-}" >> "$GITHUB_OUTPUT"
+      # this repo holds many tools: name the release clearly and never mark it as the repo's "latest"
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: SALT ${{ steps.version.outputs.version }}
+          make_latest: false
+          body: |
+            **SALT – Seed And Ledger Triage** (only the `crypto/` folder of this repository).
+            Crypto wallets, seed phrases, private keys and addresses in mobile extractions (FFS ZIP, iTunes backup, GrayKey keychain).
+            See [crypto/README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/crypto/README.md).
+
+            | File | Platform |
+            |---|---|
+            | `salt_gui.exe` | Windows, GUI |
+            | `salt.exe` | Windows, CLI (GUI without arguments) |
+            | `salt-linux` | Linux, GUI without arguments, CLI with arguments |
+          files: |
+            artifacts/salt-Windows/*.exe
+            artifacts/salt-Linux/salt-linux

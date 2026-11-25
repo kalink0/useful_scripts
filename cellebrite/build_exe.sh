@@ -35,7 +35,7 @@ echo "[2/3] Installing / checking PyInstaller..."
 "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pyinstaller -r requirements.txt
 
 echo "[3/3] Building executable..."
-"$VENV_DIR/bin/pyinstaller" --noconfirm --clean --onefile --collect-all tkinterdnd2 --name sauce sauce.py
+"$VENV_DIR/bin/pyinstaller" --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon sauce.ico --name sauce sauce.py
 
 echo
 echo "[OK] Done: $(pwd)/dist/sauce"
