@@ -1,37 +1,51 @@
 #!/usr/bin/env python3
-"""Synthetic test extractions for SALT, with real (valid, randomly generated) seed phrases.
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0 (Marco Neumann)
+# CREATION DATE:  2026-11-25
+#
+# LICENSE:        CC0-1.0
+#
+# TITLE:          make_test_data.py
+#
+# DESCRIPTION:    synthetic test extractions for BASIL
+# ------------------------------------------------------------------------------
+"""Synthetic test extractions for BASIL, with real (valid, randomly generated) seed phrases.
 
 Creates FFS ZIPs in the layouts of Cellebrite (Android "Dump/"), GrayKey (Android "/data/", with the
 duplicate data/user/0; iOS "/private/var/") and a GrayKey keychain plist. Seeds, keys and addresses
 are placed where they turn up in real cases (notes, messengers, SMS, clipboard, downloads, wallet
 apps, Apple Notes gzip blobs, deleted SQLite rows, keychain), plus negative samples that must NOT
-give seeds (CSS, JS, English text, word lists, repeated words). expected.json lists what SALT has to
+give seeds (CSS, JS, English text, word lists, repeated words). expected.json lists what BASIL has to
 find.
 
 The seeds are random: valid checksums, but no wallet behind them. Same --seed, same data.
 
 Usage:
   make_test_data.py OUTDIR [--seed N]        create the test data
-  salt.py OUTDIR -r -o OUTDIR/out            scan it
-  make_test_data.py --check OUTDIR/out       compare salt_findings.csv / salt_apps.csv with expected.json
+  basil.py OUTDIR -r -o OUTDIR/out            scan it
+  make_test_data.py --check OUTDIR/out       compare basil_findings.csv / basil_apps.csv with expected.json
 """
 import argparse
+import base64
 import csv
 import gzip
 import hashlib
 import hmac
+import io
 import json
 import os
 import plistlib
+import quopri
 import random
 import sqlite3
 import sys
 import tempfile
+import textwrap
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from salt import BIP39_EN  # noqa: E402  (the word list, checked by its hash in salt.py)
+from basil import BIP39_EN  # noqa: E402  (the word list, checked by its hash in basil.py)
 
 WORDS = BIP39_EN.split()
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -134,6 +148,80 @@ def sqlite_bytes(statements, delete=None):
         return p.read_bytes()
 
 
+def zip_bytes(files):
+    """ZIP container (Office / ODF) as bytes: {name: str | bytes}."""
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, d in files.items():
+            z.writestr(n, d)
+    return bio.getvalue()
+
+
+def docx_bytes(paragraphs):
+    """Word document; paragraphs: lists of (text, split) runs - split: the words of the run are cut
+    in two runs each, with a spell check mark between (as Word does)."""
+    def run(t):
+        return f'<w:r><w:rPr><w:lang w:val="de-DE"/></w:rPr><w:t xml:space="preserve">{t}</w:t></w:r>'
+    body = ""
+    for para in paragraphs:
+        xml = ""
+        for text, split in para:
+            if not split:
+                xml += run(text)
+                continue
+            for i, w in enumerate(text.split()):
+                k = len(w) // 2
+                xml += run(("" if i == 0 else " ") + w[:k]) + '<w:proofErr w:type="spellStart"/>' + run(w[k:])
+        body += f"<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr>{xml}</w:p>\n"
+    return zip_bytes({
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/'
+                               'package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>',
+        "_rels/.rels": '<?xml version="1.0"?><Relationships/>',
+        "word/document.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://'
+                             'schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + body +
+                             "</w:body></w:document>",
+    })
+
+
+def xlsx_bytes(cells):
+    """Excel workbook, one string per cell in column A (shared strings)."""
+    si = "".join(f"<si><t>{c}</t></si>" for c in cells)
+    rows = "".join(f'<row r="{i + 1}"><c r="A{i + 1}" t="s"><v>{i}</v></c></row>' for i in range(len(cells)))
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    return zip_bytes({
+        "[Content_Types].xml": '<?xml version="1.0"?><Types/>',
+        "xl/sharedStrings.xml": f'<?xml version="1.0"?><sst {ns} count="{len(cells)}">{si}</sst>',
+        "xl/worksheets/sheet1.xml": f'<?xml version="1.0"?><worksheet {ns}><sheetData>{rows}</sheetData></worksheet>',
+    })
+
+
+def odt_bytes(paragraphs):
+    ps = "".join(f"<text:p text:style-name=\"P1\">{p}</text:p>" for p in paragraphs)
+    return zip_bytes({
+        "mimetype": "application/vnd.oasis.opendocument.text",
+        "content.xml": '<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:'
+                       'xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body>'
+                       f"<office:text>{ps}</office:text></office:body></office:document-content>",
+    })
+
+
+def qp_encode(text, width=40):
+    """quoted-printable with soft line breaks every width characters (also inside words)."""
+    q = quopri.encodestring(text.encode()).decode().replace("=\n", "")
+    lines, i = [], 0
+    while i < len(q):
+        j = min(i + width, len(q))
+        k = q.rfind("=", j - 2, j)  # no cut inside an escape (=C3)
+        j = k if k > i else j
+        lines.append(q[i:j])
+        i = j
+    return "=\r\n".join(lines)
+
+
+def b64_lines(data):
+    return "\r\n".join(textwrap.wrap(base64.b64encode(data).decode(), 76))
+
+
 def add_android(g, z, file, prefix, dup_user0=False):
     """Android user data: messengers, notes, SMS, clipboard, downloads, wallet apps + negatives."""
     def put(path, data):
@@ -210,8 +298,50 @@ def add_android(g, z, file, prefix, dup_user0=False):
     g.apps.append((file, "com.coinbase.android"))
     put("data/data/com.coinbase.android/shared_prefs/x.xml", "<map/>")
 
+    # ---- documents and mails
+    s = g.bip39(12)  # Word: every word cut in two runs (spell check marks)
+    p = "data/media/0/Download/Wallet Backup.docx"
+    put(p, docx_bytes([[("Meine Wallet, bitte gut aufheben:", False)], [(s, True)], [("Stand 05/2024", False)]]))
+    g.expect(file, "seed", "yes", s, p)
+
+    s = g.bip39(12)  # Excel: one word per cell
+    p = "data/media/0/Documents/krypto.xlsx"
+    put(p, xlsx_bytes(["Backup"] + s.split()))  # not "Seed": a BIP39 word, it would lengthen the run
+    g.expect(file, "seed", "yes", s, p)
+
+    s = g.bip39(18)  # LibreOffice: one word per paragraph
+    p = "data/media/0/Documents/notiz.odt"
+    put(p, odt_bytes(s.split()))
+    g.expect(file, "seed", "yes", s, p)
+
+    s, att = g.bip39(12), g.bip39(24)  # mail: quoted-printable text (soft breaks in words) + docx attachment
+    p = "data/media/0/Download/Rechnung.eml"
+    put(p, "From: a@example.org\r\nTo: b@example.org\r\nSubject: Backup\r\nMIME-Version: 1.0\r\n"
+           'Content-Type: multipart/mixed; boundary="XYZ"\r\n\r\nThis is a multi-part message in MIME format.\r\n'
+           "--XYZ\r\nContent-Transfer-Encoding: quoted-printable\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+           + qp_encode(f"Hallo, hier wie besprochen: {s} Grüße") + "\r\n"
+           "--XYZ\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document;\r\n"
+           ' name="backup.docx"\r\nContent-Disposition: attachment; filename="backup.docx"\r\n'
+           "Content-Transfer-Encoding: base64\r\n\r\n" + b64_lines(docx_bytes([[(att, False)]])) + "\r\n--XYZ--\r\n")
+    g.expect(file, "seed", "yes", s, p)
+    g.expect(file, "seed", "yes", att, p)
+
+    s = g.bip39(12)  # HTML note: one word per <div>, indented
+    p = "data/data/com.example.notes/files/note.html"
+    put(p, "<html><body>\n  <div><b>Backup</b></div>\n" + "".join(f"  <div>{w}</div>\n" for w in s.split())
+           + "</body></html>")
+    g.expect(file, "seed", "yes", s, p)
+
     # negatives: code, CSS, prose, word lists, repetitions - no seed may be found here
     neg = {
+        "data/media/0/Documents/bericht.docx": docx_bytes(
+            [[("You can adjust media volume, call volume, ring volume and alarm volume in this menu.", True)]] * 20),
+        "data/media/0/Download/foto.eml":
+            "Subject: Foto\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b1\r\n\r\n--b1\r\n"
+            "Content-Type: text/plain\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n"
+            + qp_encode("You can adjust media volume, call volume, ring volume and alarm volume in this menu. " * 5)
+            + "\r\n--b1\r\nContent-Type: image/png; name=\"foto.png\"\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+            + b64_lines(b"\x89PNG\r\n\x1a\n" + bytes(g.rnd.getrandbits(8) for _ in range(3000))) + "\r\n--b1--\r\n",
         "data/data/com.android.chrome/cache/Cache/Cache_Data/1a2b_0":
             "top:0;right:0;bottom:0;left:0;margin:auto;right:auto;bottom:auto;top:-2px}.list-group .list-group-item"
             ":first-child{border-top-width:0}.panel>.table{margin-bottom:0}" * 20,
@@ -221,11 +351,16 @@ def add_android(g, z, file, prefix, dup_user0=False):
         "data/data/com.example.reader/files/book.txt":
             "You can adjust media volume, call volume, ring volume and alarm volume in this menu. " * 20,
         "data/data/com.example.game/files/words.txt": "\n".join(WORDS[:300]),  # a word list: wordlist, no seed
+        # ML model features (iOS / Android caches): "false" / "true" are BIP39 words - no seed, no word list
+        "data/data/com.example.ml/files/features.json": json.dumps(
+            {"featureFormat": "int16", "featureValue": [False] * 120, "mask": [True, False] * 60}),
         "data/data/com.example.app/files/repeat.txt": " ".join(["case", "return"] * 12),
     }
     for p, data in neg.items():
         put(p, data)
         g.negative.append((file, p))
+    p = "data/data/com.example.game/files/words.txt"
+    g.expect(file, "wordlist", "", "300 BIP39 words in a row", p)  # the only word list
 
 
 def ios_container(g, put, kind, ident):
@@ -252,6 +387,22 @@ def add_ios(g, z, file, prefix):
     p = "private/var/mobile/Library/SMS/sms.db"
     put(p, sqlite_bytes([("CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER)", ()),
                          ("INSERT INTO message VALUES (1, ?, 1)", ("Backup: " + s,))]))
+    g.expect(file, "seed", "yes", s, p)
+
+    subj, s = g.bip39(12), g.bip39(15)  # Apple Mail .emlx: seed in the encoded subject; base64 text + QP html
+    p = f"private/var/mobile/Library/Mail/{g.uuid()}/INBOX.mbox/{g.uuid()}/Data/Messages/4711.emlx"
+    sb = f"Seed: {subj}".encode()
+    enc = " ".join(f"=?UTF-8?B?{base64.b64encode(x).decode()}?=" for x in (sb[:len(sb) // 2], sb[len(sb) // 2:]))
+    msg = ("Subject: " + enc.replace(" ", "\r\n ") + "\r\nMIME-Version: 1.0\r\n"
+           "Content-Type: multipart/alternative; boundary=\"Apple-Mail=_1\"\r\n\r\n--Apple-Mail=_1\r\n"
+           "Content-Transfer-Encoding: base64\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+           + b64_lines(f"Mein Backup:\n{s}\n".encode()) + "\r\n--Apple-Mail=_1\r\n"
+           "Content-Transfer-Encoding: quoted-printable\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+           + qp_encode('<html><body style="word-wrap: break-word;"><div>Mein Backup:</div>'
+                       + "".join(f"<div>{w}</div>" for w in s.split()) + "</body></html>")
+           + "\r\n--Apple-Mail=_1--\r\n").encode()
+    put(p, str(len(msg)).encode() + b"\n" + msg + plistlib.dumps({"flags": 8590195713, "date-received": 1700000000}))
+    g.expect(file, "seed", "yes", subj, p)
     g.expect(file, "seed", "yes", s, p)
 
     tw = ios_container(g, put, "Data/Application", "com.sixdays.trust")  # Trust Wallet container
@@ -315,9 +466,9 @@ def check(outdir):
         except ValueError:
             return src
 
-    with open(outdir / "salt_findings.csv", encoding="utf-8-sig") as fh:
+    with open(outdir / "basil_findings.csv", encoding="utf-8-sig") as fh:
         found = [dict(r, file=rel(r["source"])) for r in csv.DictReader(fh, delimiter=";")]
-    with open(outdir / "salt_apps.csv", encoding="utf-8-sig") as fh:
+    with open(outdir / "basil_apps.csv", encoding="utf-8-sig") as fh:
         apps = {(rel(r["source"]), r["app_id"]) for r in csv.DictReader(fh, delimiter=";")}
     bad = 0
     for e in exp["expected"]:
@@ -336,7 +487,7 @@ def check(outdir):
         bad += not ok
         print(f"{'OK  ' if ok else 'FAIL'} wallet app       {f}: {a}")
     known = {(e["file"], e["kind"], e["value"], e["path"]) for e in exp["expected"]}
-    extra = [r for r in found if r["kind"] in ("seed", "private_key", "xpub")
+    extra = [r for r in found if r["kind"] in ("seed", "private_key", "xpub", "wordlist")
              and (r["file"], r["kind"], r["value"], r["path"]) not in known]
     for r in extra:
         print(f"FAIL unexpected {r['kind']} {r['verified']} in {r['file']}: {r['path']}  {r['value'][:60]}")
@@ -346,10 +497,10 @@ def check(outdir):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Synthetic test extractions for SALT (valid random seeds).")
-    ap.add_argument("out", help="output folder (create) or SALT result folder (--check)")
+    ap = argparse.ArgumentParser(description="Synthetic test extractions for BASIL (valid random seeds).")
+    ap.add_argument("out", help="output folder (create) or BASIL result folder (--check)")
     ap.add_argument("--seed", type=int, default=1, help="random seed (same seed: same data)")
-    ap.add_argument("--check", action="store_true", help="check SALT's CSVs in OUT against expected.json")
+    ap.add_argument("--check", action="store_true", help="check BASIL's CSVs in OUT against expected.json")
     a = ap.parse_args()
     if a.check:
         return check(a.out)

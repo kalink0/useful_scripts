@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""SALT - Seed And Ledger Triage: crypto wallets, seeds and keys in mobile extractions.
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0 (Marco Neumann)
+# CREATION DATE:  2026-11-25
+#
+# LICENSE:        CC0-1.0
+#
+# TITLE:          basil.py
+#
+# DESCRIPTION:    BASIL - crypto wallets, seeds and keys in mobile extractions (formerly SALT)
+# ------------------------------------------------------------------------------
+"""BASIL - Blockchain Assets, Seeds, Identifiers & Ledgers: crypto wallets, seeds and keys in mobile extractions.
 
 Scans full file system extractions (ZIP from Cellebrite, GrayKey, Magnet, ...), iTunes backups,
 extracted dumps and GrayKey keychain plists, directly (nothing is unpacked), for:
@@ -9,21 +19,27 @@ extracted dumps and GrayKey keychain plists, directly (nothing is unpacked), for
   - private keys (WIF, xprv), xpub/ypub/zpub, addresses (BTC, LTC, DOGE, TRX, bech32 with
     checksum; ETH by pattern only)
 Text, SQLite (incl. free pages / WAL), JSON, plists and gzip blobs in them (e.g. Apple Notes) are
-searched as raw bytes. Optional (--export): copies the files of the wallet apps and of the hits,
-with SHA-256.
+searched as raw bytes. Office documents (docx, xlsx, pptx, odt, ...) are opened and their text is
+searched; mails (MIME parts in base64 / quoted-printable, in .eml / .emlx / mbox files or databases)
+are decoded, HTML is searched without its tags. Optional (--export): copies the files of the wallet
+apps and of the hits, with SHA-256.
 
 Only the standard library is used (GUI: tkinter).
 
 Usage:
-  salt.py                              start the GUI
-  salt.py <zip|folder|keychain.plist> ... [-r] [-d] [-o DIR] [-x] [-j N] [--max-size MB]
+  basil.py                              start the GUI
+  basil.py <zip|folder|keychain.plist> ... [-r] [-d] [-o DIR] [-x] [-j N] [--max-size MB]
 """
 import argparse
+import binascii
 import csv
 import hashlib
 import hmac
+import html
+import io
 import os
 import plistlib
+import quopri
 import re
 import shutil
 import sqlite3
@@ -35,55 +51,59 @@ import zlib
 from collections import Counter
 from pathlib import Path
 
-VERSION = "dev"  # set when building: tag salt-v1.0 -> "v1.0"
-AUTHOR = "kalink0"
-HOMEPAGE = "https://github.com/kalink0/useful_scripts"
-SIGNATURE = f"SALT {VERSION} by {AUTHOR} - {HOMEPAGE}"
-ICON_PNG = (  # 64 px k0 logo (window icon, header); generated, see README
-    "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"
-    "JE/fIdo3AAAAAElFTkSuQmCC"
+VERSION = "dev"  # set when building: tag basil-v1.0 -> "v1.0"
+SIGNATURE = f"BASIL {VERSION}"  # --version, "tool" column of basil_summary.csv
+ICON_PNG = (  # 64 px icon: basil sprig (window icon, header)
+    "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"
 )
 
 # ---- wallet / exchange apps: Android package or iOS bundle id -> name (extensions "<id>.*" match too)
@@ -151,7 +171,12 @@ SKIP_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"RIFF", b"OggS", b"ID3", b"
 MAX_SIZE_MB = 1024            # larger files are not scanned (still exported with --export); messenger DBs can be ~1 GB
 CHUNK = 16 << 20              # files are scanned in chunks of this size ...
 OVERLAP, GUARD = 4096, 1024   # ... overlapping, so no hit is cut or found twice
-GZ_MAX = 4 << 20              # max. unpacked size of an embedded gzip blob
+GZ_MAX = 4 << 20              # max. unpacked size of an embedded gzip blob / a decoded mail part
+# Office / ODF / epub: ZIP containers whose XML text is searched (iWork .pages etc.: snappy, not readable)
+OFFICE_EXT = set("docx docm dotx dotm xlsx xlsm xltx xltm pptx pptm potx potm ppsx odt ott ods ots odp otp odg "
+                 "epub".split())
+HTML_EXT = {"html", "htm", "xhtml", "enex"}  # also searched without their tags
+DOC_MAX = 64 << 20            # max. size of an HTML file / of one XML file in a document (zip bomb guard)
 
 WALLET_FILE_RE = re.compile(r"^(wallet\.dat|.+\.wallet|default_wallet|UTC--\d{4}-\d\d-\d\dT.+|"
                             r".*(mnemonic|seed[ _.-]?phrase|recovery[ _.-]?phrase|secret[ _.-]?phrase|"
@@ -179,6 +204,23 @@ LOWER = frozenset(b"abcdefghijklmnopqrstuvwxyz")
 ALNUM = frozenset(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ") | LOWER
 B64 = ALNUM | frozenset(b"+/=")
 GZ_RE = re.compile(rb"\x1f\x8b\x08")
+# markup (HTML, Office XML): tags that end a block become a line break, all other tags vanish
+BLOCK_TAG_RE = re.compile(rb"</?(?:p|div|li|ul|ol|t[dhr]|h[1-6]|blockquote|pre|table|title|br|hr|"
+                          rb"w:p|w:tc|w:br|w:cr|w:tab|a:p|a:br|a:tab|text:p|text:h|text:list-item|"
+                          rb"text:line-break|text:tab|text:s|si|c|row)(?=[\s/>])[^>]*>", re.I)
+TAG_RE = re.compile(rb"<!--.*?-->|<[!?/]?[A-Za-z][^>]*>", re.S)
+ENT_RE = re.compile(rb"&(?:#\d{1,7}|#x[0-9a-fA-F]{1,6}|[A-Za-z]{2,8});")
+WS_RE = re.compile(rb"\s*\n\s*|[ \t\r\f\v]{2,}")
+# mail (MIME): encoded parts, their header; encoded words in headers (=?utf-8?B?...?=)
+MIME_RE = re.compile(rb"content-transfer-encoding:[ \t]*(base64|quoted-printable)")
+HDR_END_RE = re.compile(rb"\r?\n\r?\n")
+B64_BODY_RE = re.compile(rb"[A-Za-z0-9+/=\s]+")
+CTYPE_RE = re.compile(rb"content-type:[ \t]*([a-z0-9.+-]+/[a-z0-9.+-]+)", re.I)
+FNAME_RE = re.compile(rb"name\*?=[ \t]*\"?([^\";\r\n]+)", re.I)
+ENCWORD = rb"=\?[^?\s]+\?([bq])\?([^?\s]*)\?="
+ENCWORD_RE = re.compile(ENCWORD, re.I)
+ENCWORDS_RE = re.compile(ENCWORD + rb"(?:\s+" + ENCWORD.replace(b"(", b"(?:") + rb")*", re.I)
+TEXT_EXT = {"txt", "csv", "json", "md", "log", "xml", "rtf"}  # attachments searched as text (besides text/*)
 SEED_LENS = (24, 21, 18, 15, 12)
 B58 = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 B58_IDX = {c: i for i, c in enumerate(B58)}
@@ -304,6 +346,96 @@ def scan_bytes(buf, lo, hi, emit, where, depth=0):
                 continue
             if len(out) >= 24:
                 scan_bytes(out, 0, len(out), emit, lambda p, s=s: f"{where(s)}+gz:{p}", depth + 1)
+        scan_mime(buf, low, lo, hi, emit, where)
+
+
+# ---------------------------------------------------------------------------------------------- documents, mail
+def strip_markup(buf):
+    """HTML / XML -> text. Block ends become line breaks, all other tags vanish without a trace (Word
+    splits words into runs: <w:t>aban</w:t></w:r><w:r><w:t>don</w:t>), entities are decoded and
+    whitespace runs shortened (a seed separator is at most 4 spaces)."""
+    buf = TAG_RE.sub(b"", BLOCK_TAG_RE.sub(b"\n", buf))
+    buf = ENT_RE.sub(lambda m: html.unescape(m.group().decode()).encode("utf-8", "replace"), buf)
+    buf = buf.replace(b"\xc2\xa0", b" ")  # no-break space (&nbsp;)
+    return WS_RE.sub(lambda m: b"\n" if b"\n" in m.group() else b" ", buf)
+
+
+def scan_office(data, emit, where):
+    """Office / ODF / epub document (a ZIP, in memory): the text of its XML / HTML files.
+
+    where(member, pos) -> offset, e.g. "word/document.xml:812" (pos in the text without tags).
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for i in z.infolist():
+            if i.is_dir() or not i.filename.lower().endswith((".xml", ".xhtml", ".html", ".htm")):
+                continue
+            with z.open(i) as f:
+                t = strip_markup(f.read(DOC_MAX))
+            scan_bytes(t, 0, len(t), emit, lambda p, n=i.filename: where(n, p), 1)
+
+
+def _b64(data):
+    """Lenient base64: whitespace ignored, stops at the padding, a cut end is tolerated."""
+    c = data.translate(None, b" \t\r\n\f\v").split(b"=")[0]
+    if len(c) % 4 == 1:
+        c = c[:-1]
+    return binascii.a2b_base64(c + b"=" * (-len(c) % 4))
+
+
+def scan_mime(buf, low, lo, hi, emit, where):
+    """Mail parts in base64 / quoted-printable, wherever they are (.eml, .emlx, mbox, mail databases):
+    decoded and searched; HTML without its tags, office attachments as documents, images etc. not.
+    Encoded headers (Subject: =?UTF-8?B?...?=) too. Offsets: "<offset of the part>+mime:<pos>"."""
+    for m in MIME_RE.finditer(low):
+        s = m.start()
+        if not lo <= s < hi:
+            continue
+        e = HDR_END_RE.search(low, m.end(), m.end() + 8192)
+        if not e:
+            continue
+        # header of this part: back to the boundary line / the blank line before it (max. 4 KB)
+        w = max(0, s - 4096)
+        head = buf[max(w, low.rfind(b"\n--", w, s), low.rfind(b"\n\n", w, s), low.rfind(b"\n\r\n", w, s)):e.start()]
+        b = e.end()
+        try:
+            if m.group(1) == b"base64":
+                body = B64_BODY_RE.match(buf, b, b + GZ_MAX * 4 // 3 + GZ_MAX // 16)
+                dec = _b64(body.group()) if body else b""
+            else:
+                end = low.find(b"\n--", b, b + GZ_MAX)
+                dec = quopri.decodestring(buf[b:end if end >= 0 else b + GZ_MAX])
+        except (binascii.Error, ValueError):
+            continue
+        if len(dec) < 24:
+            continue
+        ct = CTYPE_RE.search(head)
+        ctype = ct.group(1).lower() if ct else b""
+        fn = FNAME_RE.search(head)
+        fname = fn.group(1).strip().decode("utf-8", "replace") if fn else ""
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        loc = lambda p, s=s: f"{where(s)}+mime:{p}"  # noqa: E731
+        if ext in OFFICE_EXT and dec.startswith(b"PK\x03\x04"):
+            try:
+                scan_office(dec, emit, lambda n, p, s=s: f"{where(s)}+mime:{fname}/{n}:{p}")
+            except (zipfile.BadZipFile, EOFError, ValueError, zlib.error):
+                pass  # damaged / cut attachment
+        elif ctype == b"text/html" or ext in HTML_EXT or not ctype and b"<html" in dec[:2048].lower():
+            t = strip_markup(dec)
+            scan_bytes(t, 0, len(t), emit, loc, 1)
+        elif ctype.startswith(b"text/") or ext in TEXT_EXT or not ctype:
+            scan_bytes(dec, 0, len(dec), emit, loc, 1)
+    for m in ENCWORDS_RE.finditer(buf):
+        s = m.start()
+        if not lo <= s < hi:
+            continue
+        dec = b""
+        for x in ENCWORD_RE.finditer(m.group()):
+            try:
+                dec += _b64(x.group(2)) if x.group(1) in b"bB" else quopri.decodestring(x.group(2), header=True)
+            except (binascii.Error, ValueError):
+                pass
+        if len(dec) >= 24:
+            scan_bytes(dec, 0, len(dec), emit, lambda p, s=s: f"{where(s)}+header:{p}", 1)
 
 
 def _seeds(m, cut_start, cut_end, emit, loc):
@@ -369,8 +501,8 @@ def _seed_eval(run, idx):
     if n < 12:
         return None
     ws = [w for w, _, _ in run]
-    if n > 48:  # a word list, not a seed (apps ship it)
-        return "wordlist", "BIP39", run, 0, n
+    if n > 48 and len(set(ws)) > 48:  # a word list, not a seed (apps ship it): many different words -
+        return "wordlist", "BIP39", run, 0, n  # not [false,false,...] or [true,false,...] in JSON
     if n <= 24 and n - len(set(ws)) > MAX_REPEATS:  # "case case case", "this ... this"
         return None
     wins = [(0, n)] if n in SEED_LENS else [(a, a + k) for k in SEED_LENS if k < n for a in (0, n - k)]
@@ -584,19 +716,19 @@ def scan_archive(path, label, opts, r, hits, log, cancel=None):
             if src.members[name] > opts["max_size"] << 20:
                 r["skipped_large"] += 1
                 continue
-            todo.append((name, p, app))
+            todo.append((name, p, app, ext))
         r["apps"] = sorted(apps.values(), key=lambda a: (a["match"], a["name"] or a["app_id"]))
-        total = sum(src.members[n] for n, _, _ in todo)
+        total = sum(src.members[n] for n, *_ in todo)
         log(f"[{label}] {r['platform']}: {len(paths):,} entries, {len(r['apps'])} wallet app(s), "
             f"scanning {len(todo):,} files ({fmt_size(total)}) ...")
         done, last, checked = 0, time.time(), time.time()
-        for name, p, app in todo:
+        for name, p, app, ext in todo:
             if cancel is not None and time.time() - checked > 1:
                 checked = time.time()
                 if cancel.is_set():
                     raise Cancelled(f"{done / max(total, 1):.0%}")
             try:
-                r["scanned_bytes"] += scan_member(src, name, hits.emitter(app, p))
+                r["scanned_bytes"] += scan_member(src, name, hits.emitter(app, p), ext)
                 r["scanned_files"] += 1
             except Exception as e:  # noqa: BLE001 - one unreadable member: note it, go on
                 r["errors"].append(f"{p}: {type(e).__name__}: {e}")
@@ -612,12 +744,24 @@ def scan_archive(path, label, opts, r, hits, log, cancel=None):
         src.close()
 
 
-def scan_member(src, name, emit):
-    """Scan one file in overlapping chunks -> bytes scanned (0: skipped by magic)."""
+def scan_member(src, name, emit, ext=""):
+    """Scan one file in overlapping chunks -> bytes scanned (0: skipped by magic).
+
+    ext: extension of the normalized path (iTunes backups: member names have none). Office documents
+    are opened (their text is searched instead of the ZIP), HTML is searched with and without tags.
+    """
     with src.open(name) as f:
         buf = f.read(CHUNK)
+        if ext in OFFICE_EXT and buf.startswith(b"PK\x03\x04"):
+            buf += f.read()
+            scan_office(buf, emit, lambda n, p: f"{n}:{p}")
+            return len(buf)
         if buf.startswith(SKIP_MAGIC) or buf[4:8] == b"ftyp":
             return 0
+        if ext in HTML_EXT and src.members[name] <= DOC_MAX:
+            buf += f.read()  # whole file: the raw scan below takes it as one chunk
+            t = strip_markup(buf)
+            scan_bytes(t, 0, len(t), emit, lambda p: f"text:{p}", 1)
         size, base, first = len(buf), 0, True
         while True:
             nxt = f.read(CHUNK)
@@ -690,11 +834,57 @@ def export_files(src, paths, names, out, r):
             r["errors"].append(f"export {paths[name]}: {type(e).__name__}: {e}")
 
 
+def export_later(r, out, paths=(), app=""):
+    """After a scan (GUI): export files of one source like --export, into out/files/<label>/, with their
+    SHA-256 appended to basil_files.csv. paths: normalized paths (the "path" of findings); app: also all
+    files of this app / container id. Files already listed in basil_files.csv are skipped.
+    -> dict(exported=[...], errors=[...], skipped=n)."""
+    if r["kind"] == "keychain":
+        raise ValueError("a keychain plist has no files to export")
+    out = Path(out)
+    csv_path = out / "basil_files.csv"
+    done = set()
+    if csv_path.exists():
+        with open(csv_path, newline="", encoding="utf-8-sig") as f:
+            done = {row["member"] for row in csv.DictReader(f, delimiter=";") if row["label"] == r["label"]}
+    src = Source(r["source"])
+    try:
+        platform, pm = layout(src)
+        have = set(pm.values())
+        want = set(paths)
+        uuids = ios_containers(src, pm) if app and platform in ("ios", "unknown") else {}
+        names = set()
+        for n, p in pm.items():
+            if p.startswith("data/user/0/") and "data/data/" + p[12:] in have:
+                continue  # GrayKey duplicate (as in the scan)
+            if p in want or app and app_of(p, uuids)[0] == app:
+                names.add(n)
+        todo = sorted(n for n in names if n not in done)
+        res = dict(exported=[], errors=[], skipped=len(names) - len(todo))
+        export_files(src, pm, todo, out / "files" / r["label"], res)
+    finally:
+        src.close()
+    new = not csv_path.exists() or not csv_path.stat().st_size
+    with open(csv_path, "a", newline="", encoding="utf-8-sig" if new else "utf-8") as f:  # one BOM only
+        w = csv.DictWriter(f, CSV_COLS["files"], delimiter=";", extrasaction="ignore")
+        if new:
+            w.writeheader()
+        for e in res["exported"]:
+            w.writerow(dict(e, label=r["label"], source=r["source"]))
+    r["exported"] += res["exported"]
+    return res
+
+
 # ---------------------------------------------------------------------------------------------- run
-def collect(paths, recursive=False, dump=False, exclude=None):
-    """Inputs -> [(kind, path)]: ZIPs, iTunes backup folders, *keychain*.plist; folders searched (-r: deep)."""
+def collect(paths, recursive=False, dump=False, exclude=None, progress=None, cancel=None):
+    """Inputs -> [(kind, path)]: ZIPs, iTunes backup folders, *keychain*.plist; folders searched (-r: deep).
+
+    progress: optional callback, called about every second with a status text (large folder trees).
+    cancel: optional event; when set, the search stops (-> what was found so far).
+    """
     out, seen = [], set()
     exclude = Path(exclude).resolve() if exclude else None
+    n_dirs, last = 0, time.time()
 
     def add(kind, p):
         k = Path(p).resolve()
@@ -723,6 +913,13 @@ def collect(paths, recursive=False, dump=False, exclude=None):
             for root, dirs, files in os.walk(p):
                 rp = Path(root)
                 dirs.sort()
+                n_dirs += 1
+                if time.time() - last > 1:
+                    last = time.time()
+                    if cancel is not None and cancel.is_set():
+                        return out
+                    if progress:
+                        progress(f"Searching inputs… {n_dirs:,} folders, {len(out)} extraction(s) found  ({rp})")
                 if exclude and rp.resolve() == exclude:
                     dirs[:] = []
                     continue
@@ -833,15 +1030,17 @@ def format_result(r):
 
 
 def run(paths, out, recursive=False, dump=False, export=False, jobs=1, max_size=MAX_SIZE_MB, log=None,
-        on_result=None, cancel=None):
+        on_result=None, cancel=None, sources=None):
     """Scan all inputs, write the CSVs to out -> exit code (0 nothing found, 1 found, 2 errors).
 
     on_result: optional callback, called with every result dict (GUI).
     cancel: optional threading.Event; when set, running scans stop and no new ones start.
+    sources: result of collect() when the caller already searched the inputs (GUI), else searched here.
     """
     log = log or say
     out = Path(out)
-    sources = collect(paths, recursive, dump, exclude=out)
+    if sources is None:
+        sources = collect(paths, recursive, dump, exclude=out)
     if not sources:
         log("No extractions found (ZIP, iTunes backup folder, *keychain*.plist; folders: -r for subfolders).")
         return 2
@@ -849,8 +1048,8 @@ def run(paths, out, recursive=False, dump=False, export=False, jobs=1, max_size=
     labels = [f"{i + 1:02d}_{safe_path(Path(s[1]).parent.name + '_' + Path(s[1]).stem).name}"
               for i, s in enumerate(sources)]
     opts = dict(out=str(out), export=export, max_size=max_size)
-    log(f"SALT {VERSION} by {AUTHOR}: {len(sources)} source(s) -> {out}")
-    files = {k: open(out / f"salt_{k}.csv", "w", newline="", encoding="utf-8-sig") for k in CSV_COLS}
+    log(f"BASIL {VERSION}: {len(sources)} source(s) -> {out}")
+    files = {k: open(out / f"basil_{k}.csv", "w", newline="", encoding="utf-8-sig") for k in CSV_COLS}
     code = 0
     try:
         w = {k: csv.DictWriter(f, CSV_COLS[k], delimiter=";", extrasaction="ignore") for k, f in files.items()}
@@ -880,7 +1079,7 @@ def run(paths, out, recursive=False, dump=False, export=False, jobs=1, max_size=
             f.close()
     if cancel is not None and cancel.is_set():
         log("Stopped - the CSVs contain the results up to here.")
-    log(f"Results: {out}  (findings with values only in salt_findings.csv)")
+    log(f"Results: {out}  (findings with values only in basil_findings.csv)")
     return code
 
 
@@ -937,7 +1136,7 @@ def gui():
         "ok": "#15803d", "ok_bg": "#eaf6ee", "bad": "#b91c1c", "bad_bg": "#fdeceb",
         "warn": "#a16207", "warn_bg": "#fff6dd", "err": "#475569", "err_bg": "#eef1f5",
     }
-    root.title(f"SALT {VERSION}")
+    root.title(f"BASIL {VERSION}")
     root.configure(bg=C["bg"])
 
     base = tkfont.nametofont("TkDefaultFont")
@@ -1004,7 +1203,7 @@ def gui():
     head = tk.Frame(root, bg=C["head"])
     head.pack(fill="x")
     logo_pad = px(18)
-    try:  # k0 logo: window icon + header
+    try:  # logo: window icon + header
         logo = tk.PhotoImage(data=ICON_PNG)
         root.iconphoto(True, logo)
         small = logo if scale >= 1.5 else logo.subsample(2)
@@ -1013,14 +1212,10 @@ def gui():
         logo_pad = px(10)
     except tk.TclError:
         pass
-    tk.Label(head, text="SALT", bg=C["head"], fg="white",
+    tk.Label(head, text="BASIL", bg=C["head"], fg="white",
              font=(base.actual("family"), 17, "bold")).pack(side="left", padx=(logo_pad, px(12)), pady=px(12))
-    tk.Label(head, text=f"Seed And Ledger Triage {VERSION}  ·  crypto wallets, seeds and keys in mobile extractions",
+    tk.Label(head, text=f"Blockchain Assets, Seeds, Identifiers & Ledgers {VERSION}  ·  in mobile extractions",
              bg=C["head"], fg=C["head_sub"]).pack(side="left", pady=(px(6), 0))
-    sig = tk.Label(head, text=f"by {AUTHOR}  ·  {HOMEPAGE.split('//')[1]}", bg=C["head"], fg=C["head_sub"],
-                   cursor="hand2")
-    sig.pack(side="right", padx=px(18), pady=(px(6), 0))
-    sig.bind("<Button-1>", lambda _: __import__("webbrowser").open(HOMEPAGE))
 
     body = tk.Frame(root, bg=C["bg"])
     body.pack(fill="both", expand=True, padx=px(14), pady=px(12))
@@ -1103,7 +1298,7 @@ def gui():
     ttk.Entry(r1, textvariable=out_parent).pack(side="left", fill="x", expand=True)
     ttk.Button(r1, text="…", width=3, command=lambda: out_parent.set(
         filedialog.askdirectory(title="Output folder") or out_parent.get())).pack(side="left", padx=(px(4), 0))
-    ttk.Label(r1, text="(a salt_<date>_<time> folder is created in it)",
+    ttk.Label(r1, text="(a basil_<date>_<time> folder is created in it)",
               style="Muted.TLabel").pack(side="left", padx=px(8))
     btn_exp = ttk.Button(r1, text="Open export folder", state="disabled")
     btn_exp.pack(side="right")
@@ -1213,16 +1408,23 @@ def gui():
         "all kinds", "seed", "private_key", "xpub", "address", "wallet_file", "keychain", "wordlist")).pack(
         side="left", padx=px(10))
     ttk.Checkbutton(fbar, text="Checksum ✓ only", variable=f_ok).pack(side="left")
+    f_group = tk.BooleanVar(value=True)
+    ttk.Checkbutton(fbar, text="Group by file", variable=f_group).pack(side="left", padx=(px(10), 0))
     f_info = tk.StringVar()
     ttk.Label(fbar, textvariable=f_info, style="Muted.TLabel").pack(side="left", padx=px(12))
-    ttk.Label(fbar, text="double-click: copy cell  ·  right-click: copy menu  ·  click heading: sort",
-              style="Muted.TLabel").pack(side="right")
+    btn_fexp = ttk.Button(fbar, text="Export selected files")
+    btn_fexp.pack(side="right")
+    ttk.Label(fbar, text="double-click: copy cell / open group  ·  right-click: copy, export  ·  click heading: sort",
+              style="Muted.TLabel").pack(side="right", padx=px(10))
     fcols = (("kind", "Kind", 95), ("type", "Type", 120), ("ver", "Checksum", 80), ("value", "Value", 420),
              ("app", "App", 160), ("path", "Path", 360), ("offset", "Offset", 90), ("count", "Count", 60))
-    ftree = ttk.Treeview(fframe, columns=[c[0] for c in fcols], show="headings", selectmode="browse", height=5)
+    ftree = ttk.Treeview(fframe, columns=[c[0] for c in fcols], show="tree headings", selectmode="extended",
+                         height=5)
+    ftree.column("#0", width=px(34), minwidth=px(34), stretch=False)  # open / close of a file group
     for cid, title, width in fcols:
         ftree.heading(cid, text=title, anchor="w")
         ftree.column(cid, width=px(width), anchor="w", stretch=cid in ("value", "path"))
+    ftree.tag_configure("group", font=bold)
     ftree.tag_configure("hot", foreground=C["bad"])
     ftree.tag_configure("warm", foreground=C["warn"])
     fsb = ttk.Scrollbar(fframe, orient="vertical", command=ftree.yview)
@@ -1250,7 +1452,8 @@ def gui():
     def table_tools(tv, extra=None):
         """Copy (double-click cell, right-click menu, Ctrl+C row) and sort (click heading) for a Treeview.
 
-        tv.full[iid]: full cell values (the display may be shortened); extra(iid): more menu entries.
+        tv.full[iid]: full cell values (the display may be shortened); extra(iid): more menu entries
+        (label, text to copy | function to call). Rows with children (groups): double-click opens / closes.
         """
         tv.full = {}
         heads = {c: tv.heading(c, "text") for c in tv["columns"]}
@@ -1265,20 +1468,29 @@ def gui():
 
         def on_double(ev):
             iid, ci = cell_at(ev)
-            if iid:
+            if iid and tv.get_children(iid):
+                tv.item(iid, open=not tv.item(iid, "open"))
+                return "break"  # no default toggle on top of it
+            if iid and ci >= 0:
                 copy(row_of(iid)[ci], heads[tv["columns"][ci]])
 
         def on_menu(ev):
             iid, ci = cell_at(ev)
-            if not iid:
+            if not iid or ci < 0:
                 return
-            tv.selection_set(iid)
+            if iid not in tv.selection():  # keep a multiple selection
+                tv.selection_set(iid)
             row, name = row_of(iid), heads[tv["columns"][ci]]
             menu.delete(0, "end")
             menu.add_command(label=f"Copy {name}: {row[ci][:50]}", command=lambda: copy(row[ci], name))
             menu.add_command(label="Copy row (tab-separated)", command=lambda: copy("\t".join(row), "Row"))
-            for label, text in (extra(iid) if extra else []):
-                menu.add_command(label=label, command=lambda t_=text, l_=label: copy(t_, l_))
+            for label, what in (extra(iid) if extra else []):
+                if label is None:
+                    menu.add_separator()
+                elif callable(what):
+                    menu.add_command(label=label, command=what)
+                else:
+                    menu.add_command(label=label, command=lambda t_=what, l_=label: copy(t_, l_))
             menu.tk_popup(ev.x_root, ev.y_root)
 
         def on_copy(_=None):
@@ -1295,8 +1507,9 @@ def gui():
                     return 0, float(v.replace(",", "")), ""
                 except ValueError:
                     return 1, 0.0, v.lower()
-            for n, iid in enumerate(sorted(tv.get_children(""), key=key, reverse=desc)):
-                tv.move(iid, "", n)
+            for parent in ("",) + tv.get_children(""):  # top level, then inside each group
+                for n, iid in enumerate(sorted(tv.get_children(parent), key=key, reverse=desc)):
+                    tv.move(iid, parent, n)
             for c in tv["columns"]:
                 tv.heading(c, text=heads[c] + ((" ▼" if desc else " ▲") if c == col else ""))
             tv.heading(col, command=lambda: sort_by(col, not desc))
@@ -1308,34 +1521,128 @@ def gui():
         tv.bind("<Button-2>" if sys.platform == "darwin" else "<Control-Button-1>", on_menu)
         tv.bind("<Control-c>", on_copy)
 
+    def heat(h):
+        k = FIND_ORDER.get((h["kind"], h["verified"]), 9)
+        return "hot" if k <= 1 else "warm" if k <= 5 else ""
+
     def refresh_findings(*_):
         ftree.delete(*ftree.get_children())
         ftree.full.clear()
+        ftree.ctx.clear()
+        ftree.hits.clear()
         q, kind, ok = f_text.get().strip().lower(), f_kind.get(), f_ok.get()
         shown = [h for h in cur["hits"]
                  if (kind == "all kinds" or h["kind"] == kind) and (not ok or h["verified"] == "yes")
                  and (not q or q in " ".join(str(h[k]) for k in ("kind", "type", "value", "app", "app_name", "path",
-                                                                  "context")).lower())]
-        for i, h in enumerate(shown[:MAX_ROWS]):
-            k = FIND_ORDER.get((h["kind"], h["verified"]), 9)
-            full = (h["kind"], h["type"], {"yes": "✓", "no": "✗"}.get(h["verified"], ""), h["value"],
-                    h["app_name"] or h["app"], h["path"], h["offset"], h["count"])
-            ftree.insert("", "end", iid=str(i), tags=("hot" if k <= 1 else "warm" if k <= 5 else "",),
-                         values=full[:3] + (h["value"][:300],) + full[4:])
-            ftree.full[str(i)] = full
-            ftree.ctx[str(i)] = h["context"]
+                                                                  "context")).lower())][:MAX_ROWS]
+        groups = {}  # source file -> its findings (order: most important finding first, as sorted)
+        for h in shown:
+            groups.setdefault(h["path"], []).append(h)
+        grouped = f_group.get()
+        for g, (path, hs) in enumerate(groups.items()):
+            parent = ""
+            if grouped:
+                parent = f"g{g}"
+                kinds = Counter(h["kind"] + (" ✓" if h["verified"] == "yes" else "") for h in hs)
+                summary = "  ·  ".join(f"{n:,} {k}" for k, n in kinds.most_common())
+                full = (f"{len(hs):,} finding(s)", "file", "", summary, hs[0]["app_name"] or hs[0]["app"], path, "",
+                        sum(h["count"] for h in hs))
+                ftree.insert("", "end", iid=parent, open=len(groups) == 1, values=full,
+                             tags=("group", next((t for t in ("hot", "warm") if any(heat(h) == t for h in hs)), "")))
+                ftree.full[parent] = full
+                ftree.hits[parent] = hs
+            for h in hs:
+                i = str(len(ftree.hits))
+                full = (h["kind"], h["type"], {"yes": "✓", "no": "✗"}.get(h["verified"], ""), h["value"],
+                        h["app_name"] or h["app"], h["path"], h["offset"], h["count"])
+                ftree.insert(parent, "end", iid=i, tags=(heat(h),), values=full[:3] + (h["value"][:300],) + full[4:])
+                ftree.full[i] = full
+                ftree.ctx[i] = h["context"]
+                ftree.hits[i] = [h]
         n = len(cur["hits"])
         f_info.set((f"{len(shown):,} of {n:,} shown" if len(shown) != n else "")
-                   + (f"  (first {MAX_ROWS:,} listed - all in the CSV)" if len(shown) > MAX_ROWS else ""))
+                   + (f"  in {len(groups):,} file(s)" if grouped and groups else "")
+                   + (f"  (first {MAX_ROWS:,} listed - all in the CSV)" if len(shown) >= MAX_ROWS < n else ""))
 
     def show_findings(r):
+        cur["r"] = r
         cur["hits"] = sorted(r["findings"], key=lambda h: (FIND_ORDER.get((h["kind"], h["verified"]), 9), h["path"]))
         nb.tab(fframe, text=f"Findings ({len(cur['hits']):,})")
         refresh_findings()
 
-    table_tools(ftree, extra=lambda iid: [("Copy context", ftree.ctx.get(iid, ""))])
-    ftree.ctx = {}
-    for v in (f_text, f_kind, f_ok):
+    # ---- export after the scan: files of selected findings / groups, or all files of an app
+    exp_events = queue.Queue()
+
+    def export_now(paths=(), app="", what=""):
+        r = cur.get("r")
+        if not r or not last_out:
+            return
+        if str(btn_run["state"]) == "disabled":
+            status.set("Export: wait until the scan is finished.")
+            return
+        if r["kind"] == "keychain":
+            status.set("Export: a keychain plist has no files to export.")
+            return
+        btn_fexp.configure(state="disabled")
+        status.set(f"Exporting {what} …")
+
+        def work():
+            try:
+                res = export_later(r, last_out[0], paths, app)
+                exp_events.put(("ok", (res, what)))
+            except Exception as e:  # noqa: BLE001
+                exp_events.put(("err", f"{type(e).__name__}: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+        export_poll()
+
+    def export_poll():
+        try:
+            kind, data = exp_events.get_nowait()
+        except queue.Empty:
+            root.after(100, export_poll)
+            return
+        btn_fexp.configure(state="normal")
+        if kind == "err":
+            status.set(f"Export failed: {data}")
+            return
+        res, what = data
+        dest = last_out[0] / "files" / cur["r"]["label"]
+        status.set(f"Exported {what}: {len(res['exported'])} file(s) -> {dest}  (SHA-256 in basil_files.csv)"
+                   + (f"  ·  {res['skipped']} already exported" if res["skipped"] else "")
+                   + (f"  ·  {len(res['errors'])} error(s): {res['errors'][0]}" if res["errors"] else ""))
+        if res["exported"]:
+            btn_exp.configure(state="normal")
+
+    def selected_paths(iids=None):
+        return sorted({h["path"] for i in (iids or ftree.selection()) for h in ftree.hits.get(i, [])})
+
+    def export_selected():
+        paths = selected_paths()
+        if not paths:
+            status.set("Export: select findings or file groups first (Ctrl / Shift + click: several).")
+            return
+        export_now(paths=paths, what=f"{len(paths)} selected file(s)")
+
+    def finding_menu(iid):
+        items = [] if iid not in ftree.ctx else [("Copy context", ftree.ctx[iid])]
+        r = cur.get("r")
+        if not r or r["kind"] == "keychain":
+            return items
+        paths = selected_paths()
+        hs = ftree.hits.get(iid, [])
+        items += [(None, None), (f"Export {'file' if len(paths) == 1 else f'{len(paths)} files'} (selection)",
+                                 export_selected)]
+        app = hs[0]["app"] if hs else ""
+        if app:
+            name = hs[0]["app_name"] or app
+            items.append((f"Export all files of app {name}",
+                          lambda: export_now(app=app, what=f"all files of {name}")))
+        return items
+
+    btn_fexp.configure(command=export_selected)
+    table_tools(ftree, extra=finding_menu)
+    ftree.ctx, ftree.hits = {}, {}
+    for v in (f_text, f_kind, f_ok, f_group):
         v.trace_add("write", refresh_findings)
 
     def tag_of(r):
@@ -1380,25 +1687,22 @@ def gui():
 
     # ---- run
     def run_clicked():
-        status.set("Searching inputs…")
-        root.update_idletasks()
-        sources = collect(inputs, opt["recursive"].get(), opt["dump"].get())
+        if not inputs:
+            status.set("No inputs: add ZIPs, folders or a keychain plist.")
+            return
         tree.delete(*tree.get_children())
         results.clear()
         show_detail("Select a row to see details.")
-        cur["hits"] = []
+        cur["hits"], cur["r"] = [], None
         refresh_findings()
         tree.full.clear()
         nb.tab(fframe, text="Findings")
-        if not sources:
-            status.set("No extractions found. Add ZIPs or folders (with subfolders: check 'Include subfolders').")
-            return
         parent = out_parent.get().strip() or filedialog.askdirectory(title="Output folder")
         if not parent:
             status.set("Cancelled: no output folder chosen.")
             return
         out_parent.set(parent)
-        out = Path(parent) / time.strftime("salt_%Y%m%d_%H%M%S")
+        out = Path(parent) / time.strftime("basil_%Y%m%d_%H%M%S")
         last_out[:] = [out]
         try:
             n_jobs, mb = max(1, int(jobs.get())), max(1, int(max_size.get()))
@@ -1406,19 +1710,30 @@ def gui():
             n_jobs, mb = default_jobs(), MAX_SIZE_MB
             jobs.set(n_jobs)
             max_size.set(mb)
-        prog.configure(maximum=len(sources) * 100, value=0)
+        prog.configure(maximum=100, value=0)
         for b in (btn_run, btn_open, btn_exp):
             b.configure(state="disabled")
         cancel.clear()
         btn_stop.configure(state="normal")
-        status.set(f"Scanning {len(sources)} source(s) -> {out}")
+        status.set("Searching inputs…")
+        rec, dump = opt["recursive"].get(), opt["dump"].get()
 
-        def worker():
+        def worker():  # the input search too: large folder trees take minutes, the window must stay usable
             code = 2
             try:
-                code = run(list(inputs), out, opt["recursive"].get(), opt["dump"].get(), opt["export"].get(),
-                           n_jobs, mb, log=lambda m: events.put(("log", m)),
-                           on_result=lambda r: events.put(("result", r)), cancel=cancel)
+                sources = collect(inputs, rec, dump, exclude=out, progress=lambda m: events.put(("status", m)),
+                                  cancel=cancel)
+                if cancel.is_set():
+                    return
+                if not sources:
+                    events.put(("status", "No extractions found. Add ZIPs or folders "
+                                          "(with subfolders: check 'Include subfolders')."))
+                    code = None
+                    return
+                events.put(("sources", (len(sources), out)))
+                code = run(list(inputs), out, rec, dump, opt["export"].get(), n_jobs, mb,
+                           log=lambda m: events.put(("log", m)), on_result=lambda r: events.put(("result", r)),
+                           cancel=cancel, sources=sources)
             except Exception as e:  # noqa: BLE001
                 events.put(("log", f"ERROR: {type(e).__name__}: {e}"))
             finally:
@@ -1431,7 +1746,12 @@ def gui():
         try:
             while True:
                 kind, data = events.get_nowait()
-                if kind == "log" and data.startswith("ERROR"):
+                if kind == "status":
+                    status.set(data)
+                elif kind == "sources":
+                    prog.configure(maximum=data[0] * 100, value=0)
+                    status.set(f"Scanning {data[0]} source(s) -> {data[1]}")
+                elif kind == "log" and data.startswith("ERROR"):
                     show_detail(data, "E")
                 elif kind == "log":
                     line = data.splitlines()[0]
@@ -1462,6 +1782,8 @@ def gui():
                     btn_stop.configure(state="disabled")
                     btn_open.configure(state="normal" if last_out and last_out[0].exists() else "disabled")
                     btn_exp.configure(state="normal" if last_out and (last_out[0] / "files").exists() else "disabled")
+                    if data is None:  # no extractions found: keep that message
+                        return
                     n = Counter(tag_of(r) for r in results)
                     status.set(("Stopped" if cancel.is_set() else "Done") + f": {len(results)} source(s)  ·  seeds/keys {n[KEYS]}  ·  hints {n[HINTS]}  ·  "
                                f"nothing {n[NONE]}  ·  errors {n['E']}  ·  CSVs in {last_out[0] if last_out else '-'}")
@@ -1478,7 +1800,7 @@ def gui():
         try:
             open_folder(last_out[0] / sub)
         except (OSError, IndexError) as e:
-            messagebox.showerror("SALT", f"Could not open the folder:\n{e}")
+            messagebox.showerror("BASIL", f"Could not open the folder:\n{e}")
 
     def on_close():
         import multiprocessing
@@ -1505,13 +1827,13 @@ def main():
     multiprocessing.freeze_support()  # parallel scans in PyInstaller executables
     if len(sys.argv) == 1 or sys.argv[1:] == ["--gui"]:
         return gui()
-    ap = argparse.ArgumentParser(description="SALT - Seed And Ledger Triage: crypto wallet apps, seeds, private keys and addresses "
+    ap = argparse.ArgumentParser(description="BASIL - Blockchain Assets, Seeds, Identifiers & Ledgers: crypto wallet apps, seeds, private keys and addresses "
                                              "in mobile extractions (FFS ZIP, iTunes backup, GrayKey keychain).")
     ap.add_argument("inputs", nargs="+", help="ZIP, folder, iTunes backup folder or *keychain*.plist")
     ap.add_argument("-r", "--recursive", action="store_true", help="search subfolders of given folders too")
     ap.add_argument("-d", "--dump", action="store_true", help="given folders are extracted file systems")
-    ap.add_argument("-o", "--out", default=time.strftime("salt_%Y%m%d_%H%M%S"),
-                    help="output folder for the CSVs / exports (default: salt_<date>_<time>)")
+    ap.add_argument("-o", "--out", default=time.strftime("basil_%Y%m%d_%H%M%S"),
+                    help="output folder for the CSVs / exports (default: basil_<date>_<time>)")
     ap.add_argument("-x", "--export", action="store_true", help="copy wallet app files and files with hits (+ SHA-256)")
     ap.add_argument("-j", "--jobs", type=int, default=default_jobs(),
                     help="sources in parallel (default: CPU cores, max. 4; 1 on a single HDD)")

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0 (Marco Neumann)
+# CREATION DATE:  2026-11-10
+#
+# LICENSE:        CC0-1.0
+#
+# TITLE:          make_test_ufdrs.py
+#
+# DESCRIPTION:    synthetic test UFDRs for SAUCE
+# ------------------------------------------------------------------------------
 """Create synthetic test UFDRs for SAUCE - one per traffic-light rule.
 
 The file name starts with the expected light (green_/yellow_/red_).

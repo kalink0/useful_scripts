@@ -1,7 +1,7 @@
-# Build SALT executables for Windows and Linux.
+# Build BASIL executables for Windows and Linux.
 #   - every push touching crypto/ and manual runs: executables as workflow artifacts
-#   - tag "salt-v*" (e.g. salt-v1.0): additionally a GitHub release with the files
-name: salt build
+#   - tag "basil-v*" (e.g. basil-v1.0): additionally a GitHub release with the files
+name: basil build
 
 on:
   push:
@@ -10,9 +10,9 @@ on:
       - "**"
     paths:
       - "crypto/**"
-      - ".github/workflows/salt.yml"
+      - ".github/workflows/basil.yml"
     tags:
-      - "salt-v*"
+      - "basil-v*"
   workflow_dispatch:
 
 permissions:
@@ -25,10 +25,10 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            exe: dist/salt.exe
+            exe: dist/basil.exe
           # oldest available runner = oldest glibc = binary runs on more distributions
           - os: ubuntu-22.04
-            exe: dist/salt
+            exe: dist/basil
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -46,22 +46,22 @@ jobs:
           python -c "import tkinter"
           python -m pip install --upgrade pip pyinstaller -r requirements.txt
 
-      # VERSION in salt.py: tag salt-v1.0 -> "v1.0", other builds "dev-<commit>"; fails if not replaced
+      # VERSION in basil.py: tag basil-v1.0 -> "v1.0", other builds "dev-<commit>"; fails if not replaced
       - name: Set version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/salt-v* ]]; then v="${GITHUB_REF_NAME#salt-}"; else v="dev-${GITHUB_SHA::7}"; fi
-          python -c "import re,sys; p='salt.py'; s=open(p,encoding='utf-8').read(); n=re.sub(r'^VERSION = \"dev\"', 'VERSION = \"%s\"' % sys.argv[1], s, count=1, flags=re.M); assert n != s, 'VERSION line not found'; open(p,'w',encoding='utf-8',newline='').write(n)" "$v"
-          grep -n '^VERSION = ' salt.py
+          if [[ "$GITHUB_REF" == refs/tags/basil-v* ]]; then v="${GITHUB_REF_NAME#basil-}"; else v="dev-${GITHUB_SHA::7}"; fi
+          python -c "import re,sys; p='basil.py'; s=open(p,encoding='utf-8').read(); n=re.sub(r'^VERSION = \"dev\"', 'VERSION = \"%s\"' % sys.argv[1], s, count=1, flags=re.M); assert n != s, 'VERSION line not found'; open(p,'w',encoding='utf-8',newline='').write(n)" "$v"
+          grep -n '^VERSION = ' basil.py
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --icon salt.ico --name salt_gui salt.py
-          pyinstaller --noconfirm --onefile --console --collect-all tkinterdnd2 --icon salt.ico --name salt salt.py
+          pyinstaller --noconfirm --clean --onefile --windowed --collect-all tkinterdnd2 --icon basil.ico --name basil_gui basil.py
+          pyinstaller --noconfirm --onefile --console --collect-all tkinterdnd2 --icon basil.ico --name basil basil.py
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: pyinstaller --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon salt.ico --name salt salt.py
+        run: pyinstaller --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon basil.ico --name basil basil.py
 
       - name: Test (built executable against generated test extractions)
         run: |
@@ -72,12 +72,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: salt-${{ runner.os }}
+          name: basil-${{ runner.os }}
           path: crypto/dist/*
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/salt-v')
+    if: startsWith(github.ref, 'refs/tags/basil-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -87,25 +87,25 @@ jobs:
         with:
           path: artifacts
       - name: Rename Linux binary
-        run: mv artifacts/salt-Linux/salt artifacts/salt-Linux/salt-linux
-      - name: Version from tag (salt-v1.0 -> v1.0)
+        run: mv artifacts/basil-Linux/basil artifacts/basil-Linux/basil-linux
+      - name: Version from tag (basil-v1.0 -> v1.0)
         id: version
-        run: echo "version=${GITHUB_REF_NAME#salt-}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${GITHUB_REF_NAME#basil-}" >> "$GITHUB_OUTPUT"
       # this repo holds many tools: name the release clearly and never mark it as the repo's "latest"
       - uses: softprops/action-gh-release@v2
         with:
-          name: SALT ${{ steps.version.outputs.version }}
+          name: BASIL ${{ steps.version.outputs.version }}
           make_latest: false
           body: |
-            **SALT – Seed And Ledger Triage** (only the `crypto/` folder of this repository).
+            **BASIL – Blockchain Assets, Seeds, Identifiers & Ledgers** (only the `crypto/` folder of this repository).
             Crypto wallets, seed phrases, private keys and addresses in mobile extractions (FFS ZIP, iTunes backup, GrayKey keychain).
             See [crypto/README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/crypto/README.md).
 
             | File | Platform |
             |---|---|
-            | `salt_gui.exe` | Windows, GUI |
-            | `salt.exe` | Windows, CLI (GUI without arguments) |
-            | `salt-linux` | Linux, GUI without arguments, CLI with arguments |
+            | `basil_gui.exe` | Windows, GUI |
+            | `basil.exe` | Windows, CLI (GUI without arguments) |
+            | `basil-linux` | Linux, GUI without arguments, CLI with arguments |
           files: |
-            artifacts/salt-Windows/*.exe
-            artifacts/salt-Linux/salt-linux
+            artifacts/basil-Windows/*.exe
+            artifacts/basil-Linux/basil-linux

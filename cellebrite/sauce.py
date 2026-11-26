@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# ------------------------------------------------------------------------------
+# AUTHOR:         kalink0 (Marco Neumann)
+# CREATION DATE:  2026-11-10
+#
+# LICENSE:        CC0-1.0
+#
+# TITLE:          sauce.py
+#
+# DESCRIPTION:    SAUCE - traffic light for importing UFDRs
+# ------------------------------------------------------------------------------
 """SAUCE - SIM And UFDR Content Evaluator.
 
 Traffic light for importing UFDRs into analysis software.
@@ -33,8 +43,10 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import re
 import sys
+import time
 import zipfile
 import zlib
 import xml.etree.ElementTree as ET
@@ -42,54 +54,50 @@ from collections import Counter
 from pathlib import Path
 
 VERSION = "dev"  # set by the build workflow: tag sauce-v1.4 -> "v1.4", other builds "dev-<commit>"
-AUTHOR = "kalink0"
-HOMEPAGE = "https://github.com/kalink0/useful_scripts"
-SIGNATURE = f"SAUCE {VERSION} by {AUTHOR} - {HOMEPAGE}"
-ICON_PNG = (  # 64 px k0 logo (window icon, header, HTML report); generated, see README
-    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAMi0lEQVR4nO2beZBdVZ3HP79z7tt6byB76ISYPSQyqIUQMIBVKssA"
-    "IzQiWDMDVWYsEQZEllExMIpEagoLBYcpAUeo0YGQmYmlRqDIMmTTAYxxsput6RSEhCSd7ve633v3nN/8ce97nc4y5L3upBNmflW3"
-    "7uu+Z/t9z2875/yOcGQygMYPLVMvuhT0KpSZoGcBTYA9St3BIgfsB9mGsEzE/2LH2hWL428SP/7QSnJ4O60W5jmAlikXfgGRrwh6"
-    "nohBVVEUVI8bF/0iEQRBRFD1KKwS4bEda5f9a1Sgl7dylT4NzJoVsHRpOGrKeRMCEk+KtZeiivcOUAdSQvIIwJ0UFEutKog1xoII"
-    "6v2rLl/8UvuWVX8q8Viq0MtI/KFl4vmflCB4XkRO9y4MEQyIGQxu+k/qUbyxiUDV7dHQfa5t08pFB4MQAxCJRsvE8y8lsL8WJKXe"
-    "hYgEgzn8ASPVUIwNFM075y/buXHF4hLPAnMMPKgtEy8aS6BvCtKk3jlETjYj1z9SdWKsRXWfOvlI26bXtsMcMcyJCxj/U2NsUzzz"
-    "HyzmAUSseheKtc0Y/88AzIlVYPTk828IgtTPfVj44Ij90Ug1NEEy8D68vm3dsnkGWq1g7lH1ipy01n3gSBBVr6r+Pmi1MmrSzIsD"
-    "K4tVVTl53dtAkyIiXt0sY4TPihhAD4uSPrik3ohB1FwXIDoznvyKZt8Y07dGLD/eK3qyRoplElFVEJ0ZiHJWHPJXFOxkszmcOyiq"
-    "FAFVUukUyURiQEAwIogxHIqzeo/vX/sGVUQ5K0BoVI69MREhny/wrftuZ9KEcTj1WDE477DG8pN/eZFXXn2NurpavK9Oq0QEY4Tu"
-    "7h56egr4g7TTiJBOp8hk0v2SNkVBaAwqDXNFhNB7PnHhecyYNumw74tfW0WhUEQq06gyWWPoKRTo6ckzeeKH+Mg5ZzO2ZTS1tRly"
-    "3T1s39HOG7//I+s3bSGTTpFMJqsGGsRU5fMF6OrK4pzDeY81Bucc1loKhUL1zFtDNtvN8GFDuP/e27jiM5eQSacPK9fdk+eXC1/l"
-    "29/7Ibve3UNtbQbnqgOh6qDHGIO10WrLGhMzYKtm3hhDrruHljNH8uJzP2JMyygAnPMcrKICZNIpWv/icj527gyu+8KX2fn2LtLp"
-    "VFWScMJWeSJy1AfAe481lh//8GHGtIyiWCyiGkmFEQGN9N9aiyoUi0XGjhnNkz94CACt0oufEABKhvPwJ08+XyAILB0HOrnhuis5"
-    "Z8ZUwjAkkUiU3awxhiCwGBNtyohAIpEgDEM++mfTuf6zV7C/ozOSyArpuMf9IkKhWGRMy6g+6lGy3kaEnW/vIpVKcWPrVTGD0bx4"
-    "rxgj/HHtRp5+9nmuvfoyLrrgY3jVyEXGu1R/fdO1PD//l1WpwHEFIAgCdu95j7v/djb33PE3eI0MpgIudKTTKe76+kM8/ewLzJg2"
-    "menTJpVdYGmmu7t7mH371/nd63/g1y8v4bWXXmDY0DNQVayNgJpx9mSmTB7Pug2bqclkKgLiuKlAIgjYu28/V3z6Ur55z1dIpZJk"
-    "0mmSySSJIKCmJsMzz83jpz/7N5KJBJMmjCu7tCimUkSEdRs2s3VbGxPGj2X3nr389vXVAGUmS97n3A9PI5+v3AMdFwCMNXRlc4wf"
-    "N4YnHn0Q6B1wGDqMMSxaupK/m/MIzU0NhKHjQ+PGxOUi1SipyLYd7RSKRbz3eO/Zuv2t+HvUV8k/TJk0PgKt0rFWz+aRSVVxzpFI"
-    "BDz1+FxOa26KddngvScILFu3tfGlO75BMpmM9Bhl5IihUQMxByXG9ry3t49I796zNyomfYozeuTwyENUON4BtwH5fIGurizP/OgR"
-    "Pjx9CqFzBNaWRbqrK8stX76Xffs7qK+rw3uPMYamxgbgoPV4zElnV678W0Toymb7dhgj0dzcSCIIKnaHAyYBJd3b3tbOF2/+PNde"
-    "/RnCsMR8b5nb736Q1WvW0VBfHy+mImDSh0Z8MRLFYqH8W0QoFopHKkY6nSrHCJXQgEmAMYZ8ocCwoUP47pyvRYFNbKVLszL30Sd5"
-    "ccFChpxxOmEY9q1/FONVZqik80fh0IipajtnQCSgNKZCvsA9d8zmtOamcpRXEvGt29/i+48/zenNTYcwH7m8QrF4SKPRqxzcSNTR"
-    "0YKdYhiigxUKlyavvr6OiePPKus7RJLhvGfc2DO58XNXs6/jAEHQlwn1yoEDndHvQ9rOZNK9s1/6++C68bdsNkcYusF3g6oae4K+"
-    "a3hjDN+69zZaRo+kpydfHmjJ57+9a3fcQFwp5qO5qbFcVlVpjo1lL1DRr9179hKG4ckBQLRSNGV9FRGcc5zW3MTff/NOsrnu8gpS"
-    "NYobtmzdUS4Lveo8asQwgkSAIBgRRo4cfkh/0Xt7WzveD3IcUGJ+w6YtzF/wm9gGRCO01uKc45orP8U1V36Kvfs7Ig/hPalkkrXr"
-    "NxOGrmw4TQzQ1Mnjqa3J0NHZiRjDOdOnRN/LKha9167fFIFe4ZgHDIBSsLJk2W/58+u/yG1fe4Dtbe2I9H6Ljq2V79z/Vc44rZlC"
-    "sYgSubDNW7axfuNmVDUOhyMDOmL4UO649RaSiQSzb76BGdOnlIEuvXO5blavWU86na54QTRgAJQM34v/sZBd7+7BOccD330sZjru"
-    "LI4GR48awTfuvpWOA13Ret8Ysrlu5v37wojx0koxloI7b72F//7dS8x98N54Fdi7hwDwnyv+i2073iKdTla8RzjgNqC2JoO1hoaG"
-    "Ohb86hUWvrwEa015B9kai3Oev7rpWj558QV0dHQiAg31dfzshQW073yHIFaXEnmvNNTX9WEuStaI6PF/eraqIAj6AYDzPtoTPMKj"
-    "8W5tOpXkgYcfI5vNoQphGOK8w3mH957v3P9VEskEhUJIMpFgf8cB7rzv23EQZaPyzgORWpTUIwwjcAJr+Ycf/JjlK1+nvspd6KoA"
-    "UI1mzFpLMpGI3skk1lpSqWQ8UKWmpob1G7fw/SeeIQgsQRD0qTNtykQeuv8ucrkcXpWGhnpeXbqCv5x9F2+/825cPlKRg58giMD5"
-    "3qNPMvfRf6Sxsb7vGUUFVHEorKoEgeVXLy1iw6Y/oV4RI6j3iDFs2rytDIJzjqbGep557gVGDB9KQ0Nd+QQpSmRR0ukUw4YN4UBn"
-    "FzZeFC18eQmr16zjumsu5+KLzqPlzJFk0mkKxSLv7NrN62+uYf6C3/D7NetobKjv1yGMtEyZWXFtEejqyhEeAfVMJk0qmTxEX6Gz"
-    "s/OILkpEaKiv6/M/ay35QoFsV45EIqCurpZEIoFzIdlsN909PaTTKWpraqqe+XL/1QAApbPBw8OOkq4eSkffsNQj7ulLHD2WJKnk"
-    "ZYwxWGPwsT3oL1W9Gqy080pnqsQ4xEFPOXLUI0petXRKZIMoHLfcxFM0/W3g6P8BGOwBDDb1zwaIYfDTirRf2T3VAyAGLWZRHzJ4"
-    "ICiIxSRrqzaSVQIgaDFHZvSF1IyZBWLj/OQTBESpL/V0ty8nt2MJEmQ4fEPt/anyQEgsvtBJ3YSrGDLrgYo7HHASeG/5IxxY93NM"
-    "siFKaq+AKpcAdZhEhsazb0KdwxeyiBkcW6rqMUGGhmk3kt2yEHWF2C4d+5wGkQU51jyhSOzEBohNg3fxUXap0xNlC6K+RAB1iE0i"
-    "NoEP85VqoQ9QOkSk+dgyxRRMgMsfILv9FZo/egs+X/IEJ9oQRncjTCqgc9MvCHO7Mcn6Y/YIEp1H7A9U2CYizfHxzftLgjpMooaO"
-    "1U+Bd9S0fILBdIXdO1ey/w9PYYJMJZ7AR6LrtwWoLBMj50a5wsfKiIDAvjeeoGPNTyIvUIUF7h9F6uiLWUyitsIxqEabrrLcqPj5"
-    "USJipddiBJNqjKsNRppx5Ap7x1DJBIjx6lHx8037+tHLVf2bYiwV+5By8UGMBjU6Ya6kghgL6t9oXz96uYF5TsQ8LGKESnJmT1VS"
-    "VMQIYubCPGeYM8e0rVs237nCUhMkAlTD92/lFCXV0ASJwLni4rZ1y+bT2moNUQoP4sKb1bl9YmyAVqgKpwJFl6YC7917Fn8zAPOm"
-    "ap9rc6MmXXCJtWbhB/nanPfhp9s3rFpa4jm2/PMcs2YFOzeuWEzoLgfdY2xJHU7lmyTqS2KvsFucv6x9w6qltPZeoe11fUuXhsya"
-    "FbRtWrnIEZ6v3i0yQSIwJojLqCPydyezoVTAl9yTMYExQSLw3r1CUT++Y+OKxbS2Wub13h/+Xy9Pj5l64ecVbhf4+P+Ny9O91Of6"
-    "/JhpF1yiaq4+Ba7P7wO2IrLiWK/P/w8tDysS1wTeKwAAAABJRU5ErkJggg=="
+SIGNATURE = f"SAUCE {VERSION}"  # --version, "tool" column of the CSV
+ICON_PNG = (  # 64 px icon: gravy boat (window icon, header, HTML report)
+    "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"
 )
 
 # "SIM" not touching other letters: "SIM Card", "EXTRACTION_SIM", "USIM" - but not "SIMPLE"
@@ -1129,13 +1137,26 @@ def format_result(r, full=True):
     return "\n".join(out)
 
 
-def collect_files(paths, recursive=False):
-    """Expand files/folders into a list of UFDRs. Returns (files, not_found)."""
-    pattern = "**/*" if recursive else "*"
+def collect_files(paths, recursive=False, progress=None):
+    """Expand files/folders into a list of UFDRs. Returns (files, not_found).
+
+    Only file names are compared (no stat per file). progress: optional callback, called about every
+    second with a status text (large folder trees take minutes on a disk).
+    """
     files, missing = [], []
+    n_dirs, last = 0, time.time()
     for p in map(Path, paths):
         if p.is_dir():
-            files += sorted(f for f in p.glob(pattern) if f.is_file() and f.suffix.lower() == ".ufdr")
+            found = []
+            for root, dirs, names in os.walk(p):
+                found += [Path(root, n) for n in names if n.lower().endswith(".ufdr")]
+                if not recursive:
+                    break
+                n_dirs += 1
+                if progress and time.time() - last > 1:
+                    last = time.time()
+                    progress(f"Searching UFDRs… {n_dirs:,} folders, {len(files) + len(found)} found  ({root})")
+            files += sorted(found)
         elif p.is_file():
             files.append(p)  # given explicitly: checked regardless of extension
         else:
@@ -1199,8 +1220,6 @@ HTML_CSS = """
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif}
 header{background:var(--head);color:#fff;padding:18px 28px;display:flex;align-items:center;gap:14px}
 header .logo{width:44px;height:44px}
-header .sig{margin:0 0 0 auto;align-self:flex-end}
-footer a{color:inherit}
 header h1{margin:0;font-size:22px}
 header p{margin:2px 0 0;color:#94a3b8}
 main{max-width:1200px;margin:0 auto;padding:20px 28px}
@@ -1317,7 +1336,6 @@ def write_html(results, path, case="", settings=None):
         meta.append(f"<dt>Case number</dt><dd class='case'>{e(case)}</dd>")
     meta.append(f"<dt>Created</dt><dd>{now}</dd>")
     meta.append(f"<dt>SAUCE version</dt><dd>{e(VERSION)}</dd>")
-    meta.append(f"<dt>Tool</dt><dd>SAUCE by {e(AUTHOR)} · <a href='{e(HOMEPAGE)}'>{e(HOMEPAGE)}</a></dd>")
     meta.append(f"<dt>UFDRs</dt><dd>{len(results)}</dd>")
     for k, v in settings.items():
         meta.append(f"<dt>{e(k)}</dt><dd>{e(str(v))}</dd>")
@@ -1327,8 +1345,7 @@ def write_html(results, path, case="", settings=None):
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(title)}</title><style>{HTML_CSS}</style></head><body>
 <header><img class="logo" alt="" src="data:image/png;base64,{ICON_PNG}"><div><h1>{e(title)}</h1>
-<p>SIM And UFDR Content Evaluator {e(VERSION)} · traffic light for import</p></div>
-<p class="sig">by {e(AUTHOR)}</p></header>
+<p>SIM And UFDR Content Evaluator {e(VERSION)} · traffic light for import</p></div></header>
 <main>
 <section class="card"><dl class="meta">{''.join(meta)}</dl></section>
 <section class="card"><h2>Overview</h2><div class="chips">
@@ -1344,7 +1361,7 @@ def write_html(results, path, case="", settings=None):
 <li><b>CHECK</b>: 2 extractions · SIM extraction with data · hardly any content
 (messages, contacts, locations and calls each below {e(str(settings.get('Min. items', MIN_ITEMS)))}) · warnings</li>
 <li><b>GO</b>: everything else</li></ul></section>
-</main><footer>SAUCE {e(VERSION)} · by {e(AUTHOR)} · <a href="{e(HOMEPAGE)}">{e(HOMEPAGE)}</a> · {now}</footer></body></html>
+</main><footer>SAUCE {e(VERSION)} · {now}</footer></body></html>
 """
     Path(path).write_text(doc, encoding="utf-8")
 
@@ -1453,6 +1470,7 @@ def run_gui():
     case_no = tk.StringVar()
     run_settings = {}
     export_dir = []  # target folder of the last run's export (empty: no export)
+    nothing_found = [False]  # last run found no UFDR: its message stays in the status line
     source = tk.StringVar(value="auto")
     status = tk.StringVar(value="Ready.")
 
@@ -1469,7 +1487,7 @@ def run_gui():
     head = tk.Frame(root, bg=C["head"])
     head.pack(fill="x")
     logo_pad = px(18)
-    try:  # k0 logo: window icon + header
+    try:  # logo: window icon + header
         logo = tk.PhotoImage(data=ICON_PNG)
         root.iconphoto(True, logo)
         small = logo if scale >= 1.5 else logo.subsample(2)
@@ -1482,10 +1500,6 @@ def run_gui():
              font=(base.actual("family"), 17, "bold")).pack(side="left", padx=(logo_pad, px(12)), pady=px(12))
     tk.Label(head, text=f"SIM And UFDR Content Evaluator {VERSION}  ·  traffic light for import", bg=C["head"],
              fg=C["head_sub"]).pack(side="left", pady=(px(6), 0))
-    sig = tk.Label(head, text=f"by {AUTHOR}  ·  {HOMEPAGE.split('//')[1]}", bg=C["head"], fg=C["head_sub"],
-                   cursor="hand2")
-    sig.pack(side="right", padx=px(18), pady=(px(6), 0))
-    sig.bind("<Button-1>", lambda _: __import__("webbrowser").open(HOMEPAGE))
 
     body = tk.Frame(root, bg=C["bg"])
     body.pack(fill="both", expand=True, padx=px(14), pady=px(12))
@@ -1671,15 +1685,20 @@ def run_gui():
             *((f"{n_files(r['files'], c):,}" if ok else "") for c in FILE_CATS), note))
 
     # ---- run
-    def worker(files, n_jobs, **kw):
+    def worker(paths, recursive, n_jobs, **kw):
         done = 0
+        files = []
 
         def running(fs):
             if fs:
                 events.put(("progress", (done + 1, f"{done}/{len(files)} done  ·  checking:  "
                                          + ",  ".join(Path(f).name for f in fs))))
 
-        try:
+        try:  # the search too: large folder trees take minutes, the window must stay usable
+            files, missing = collect_files(paths, recursive, progress=lambda m: events.put(("status", m)))
+            events.put(("found", (len(files), missing)))
+            if not files:
+                return
             for _, r in check_all(files, n_jobs, running=running, **kw):
                 done += 1
                 events.put(("result", r))
@@ -1690,7 +1709,16 @@ def run_gui():
         try:
             while True:
                 kind, data = events.get_nowait()
-                if kind == "progress":
+                if kind == "status":
+                    status.set(data)
+                elif kind == "found":
+                    n, missing = data
+                    prog.configure(maximum=max(n, 1), value=0)
+                    show_detail("\n".join(f"Not found: {m}" for m in missing) or "Select a row to see details.")
+                    status.set(f"{n} UFDR(s) found, checking…" if n else
+                               "No UFDR files found. Add files or folders (with subfolders: check the option).")
+                    nothing_found[0] = not n
+                elif kind == "progress":
                     prog["value"] = data[0] - 1
                     status.set(data[1])
                 elif kind == "result":
@@ -1698,7 +1726,8 @@ def run_gui():
                     add_row(len(results) - 1, data, sum(r["idx"] < data["idx"] for r in results))
                     prog["value"] = len(results)
                 elif kind == "done":
-                    status.set(footer(results))
+                    if not nothing_found[0]:  # else keep the "no UFDR files found" message
+                        status.set(footer(results))
                     btn_run.configure(state="normal")
                     for b in (btn_csv, btn_html):
                         b.configure(state="normal" if results else "disabled")
@@ -1715,13 +1744,12 @@ def run_gui():
         root.after(100, poll)
 
     def run():
-        files, missing = collect_files(inputs, opt["recursive"].get())
-        tree.delete(*tree.get_children())
-        results.clear()
-        show_detail("\n".join(f"Not found: {m}" for m in missing) or "Select a row to see details.")
-        if not files:
+        if not inputs:
             status.set("No UFDR files found. Add files or folders first.")
             return
+        tree.delete(*tree.get_children())
+        results.clear()
+        show_detail("Select a row to see details.")
         try:
             min_n = max(0, int(min_items.get()))
         except (tk.TclError, ValueError):
@@ -1730,13 +1758,16 @@ def run_gui():
         kinds = [k for k in ("passwords", "accounts") if opt[k].get()]
         out_dir = None
         if kinds:
+            first = Path(inputs[0])
             out_dir = filedialog.askdirectory(title=f"Target folder for the export ({', '.join(kinds)})",
-                                              initialdir=str(Path(files[0]).parent))
+                                              initialdir=str(first if first.is_dir() else first.parent))
             if not out_dir:
                 status.set("Cancelled: no target folder for the export chosen.")
                 return
         export_dir[:] = [out_dir] if out_dir else []
-        prog.configure(maximum=len(files), value=0)
+        prog.configure(maximum=1, value=0)
+        nothing_found[0] = False
+        status.set("Searching UFDRs…")
         btn_run.configure(state="disabled")
         btn_open.configure(state="disabled")
         btn_csv.configure(state="disabled")
@@ -1751,7 +1782,8 @@ def run_gui():
         except (tk.TclError, ValueError):
             n_jobs = default_jobs()
             jobs.set(n_jobs)
-        threading.Thread(target=worker, daemon=True, args=(files, n_jobs), kwargs=dict(
+        args = (list(inputs), opt["recursive"].get(), n_jobs)
+        threading.Thread(target=worker, daemon=True, args=args, kwargs=dict(
             verify=opt["verify"].get(), source=source.get(), min_items=min_n, quick=opt["quick"].get(),
             passwords="passwords" in kinds, accounts="accounts" in kinds, export_dir=out_dir)).start()
         poll()

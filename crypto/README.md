@@ -1,8 +1,8 @@
-# SALT – Seed And Ledger Triage
+# BASIL – Blockchain Assets, Seeds, Identifiers & Ledgers
 
-Crypto wallets, seeds and keys in mobile extractions. By kalink0.
+Crypto wallets, seeds and keys in mobile extractions.
 
-`salt.py` searches full file system extractions of phones for crypto wallets, seed phrases,
+`basil.py` searches full file system extractions of phones for crypto wallets, seed phrases,
 private keys and addresses (Python 3.8+, standard library only). It reads the ZIPs directly,
 nothing has to be unpacked or processed beforehand.
 
@@ -17,9 +17,9 @@ Inputs:
 
 Folders are searched for `*.zip`, `*keychain*.plist` and backup folders (`-r`: subfolders too).
 
-## Where SALT searches (which data)
+## Where BASIL searches (which data)
 
-SALT reads the archives directly (ZIP members are streamed, nothing is unpacked) and decides per file:
+BASIL reads the archives directly (ZIP members are streamed, nothing is unpacked) and decides per file:
 
 **1. Which part of the extraction.** The path prefix of the tool (`Dump/`, `filesystem1/`, `/` …) is
 detected and removed, then only the **user data** is searched (`SCAN_ROOTS`):
@@ -51,13 +51,28 @@ notes) are found as long as they were not overwritten. **gzip blobs** inside a f
 of Apple Notes in `ZICNOTEDATA.ZDATA`) are unpacked (up to 4 MB) and searched too. Text has to be
 UTF-8 / ASCII (any case).
 
+Besides the raw bytes:
+
+- **Office documents** (`OFFICE_EXT`: `docx xlsx pptx` and their macro / template variants, `odt ods
+  odp odg` …, `epub`) are ZIP containers: they are opened and the text of their XML files is searched
+  (Word: body, headers / footers, comments, deleted text with change tracking; Excel: `sharedStrings`,
+  cells; PowerPoint: slides, notes). Tags are removed first (Word splits words into runs, e.g. at a
+  spell check mark), paragraphs / cells become line breaks. Old `doc` / `xls` (OLE) are searched raw.
+- **Mails** (MIME): parts in **base64** / **quoted-printable** are decoded wherever they are – `.eml`,
+  Apple Mail `.emlx` (`Library/Mail/`), `mbox`, raw messages in mail app databases. Text parts are
+  searched, HTML parts without tags, **office attachments** as documents (above), images and other
+  binary attachments not. Encoded headers (`Subject: =?UTF-8?B?…?=`) too. Up to 4 MB per part.
+- **HTML** files (`html htm xhtml enex`) are searched a second time without tags: a seed with one word
+  per `<div>` / `<p>` / `<br>` (HTML notes, mail bodies, Evernote exports) is not a word run in the raw
+  bytes.
+
 **Wallet apps** are detected from the paths of **all** files (also the ones not searched): Android
 package (`data/data/<pkg>/`, `data/user*/<n>/<pkg>/`, `data/media/0/Android/data|media|obb/<pkg>/`), iOS
 bundle id / app group (container UUID → `MCMMetadataIdentifier` of
 `.com.apple.mobile_container_manager.metadata.plist`), iTunes domain (`AppDomain-<id>`), keychain
 access group (`agrp`, team id removed).
 
-## What SALT searches for (patterns)
+## What BASIL searches for (patterns)
 
 | Kind | Pattern | Check | `verified` |
 |---|---|---|---|
@@ -105,20 +120,24 @@ or chance.
 - other word lists (BIP39 Spanish, Japanese …), Monero 25-word seeds, raw hex private keys (ETH, 64 hex:
   far too many false hits)
 - UTF-16 text (left out for speed; SQLite, plists and JSON on phones store seeds as UTF-8 / ASCII)
-- compressed data other than gzip (zlib, LZ4, zstd, Snappy in LevelDB, ZIP files inside the extraction)
+- compressed data other than gzip (zlib, LZ4, zstd, Snappy in LevelDB, ZIP files inside the extraction
+  other than office documents)
+- **PDF** (text in compressed streams, often encoded per font), **iWork** (`pages numbers key`: IWA
+  with Snappy), password protected Office documents (encrypted OLE container)
+- a mail part cut at a 16 MB chunk border is only searched up to that border
 - files outside the user data (see above) and larger than `--max-size`
 
 ## Usage
 
 ```
-python3 salt.py                           # GUI
-python3 salt.py <zip|folder|keychain.plist> [...] [-r] [-d] [-o DIR] [-x] [-j N] [--max-size MB]
+python3 basil.py                           # GUI
+python3 basil.py <zip|folder|keychain.plist> [...] [-r] [-d] [-o DIR] [-x] [-j N] [--max-size MB]
 
   -r, --recursive   search subfolders of given folders too
   -d, --dump        given folders are extracted file systems (scanned as such)
-  -o, --out DIR     output folder (default: salt_<date>_<time>)
+  -o, --out DIR     output folder (default: basil_<date>_<time>)
   -x, --export      copy the files of the wallet apps and the files with seeds / keys / xpubs /
-                    wallet file names to DIR/files/<label>/ (original paths), SHA-256 in salt_files.csv
+                    wallet file names to DIR/files/<label>/ (original paths), SHA-256 in basil_files.csv
   -j, --jobs N      sources in parallel (default: CPU cores, max. 4; use 1 on a single HDD)
   --max-size MB     do not scan larger files (default 1024)
 ```
@@ -130,19 +149,23 @@ Output (`;` separated, UTF-8 with BOM, opens in Excel):
 
 | File | Content |
 |---|---|
-| `salt_summary.csv` | one row per source: platform, files scanned, counts, errors, notes |
-| `salt_findings.csv` | every hit: kind, type, verified, **value**, app, path, offset, count, context |
-| `salt_apps.csv` | wallet apps: id, name, match (`known` / `name`), files, size, locations |
-| `salt_files.csv` | with `-x`: exported files with size and SHA-256 |
+| `basil_summary.csv` | one row per source: platform, files scanned, counts, errors, notes |
+| `basil_findings.csv` | every hit: kind, type, verified, **value**, app, path, offset, count, context |
+| `basil_apps.csv` | wallet apps: id, name, match (`known` / `name`), files, size, locations |
+| `basil_files.csv` | with `-x`: exported files with size and SHA-256 |
 
-Values (seeds, keys) are only written to `salt_findings.csv`, the screen only shows counts.
-`offset` is the byte offset in the file; `<ofs>+gz:<n>`: inside a gzip blob at `<ofs>`.
+Values (seeds, keys) are only written to `basil_findings.csv`, the screen only shows counts.
+`offset` is the byte offset in the file; `<ofs>+gz:<n>`: inside a gzip blob at `<ofs>`;
+`<ofs>+mime:<n>` / `<ofs>+header:<n>`: in the decoded mail part / encoded header at `<ofs>`;
+`word/document.xml:<n>`: in that file of an office document (`<ofs>+mime:<attachment>/…` for an
+attachment); `text:<n>`: in an HTML file without tags. `<n>` in decoded / tag-free text counts in that
+text, not in the file.
 
 ## GUI
 
 Start without arguments (or with `--gui`): drop ZIPs / folders onto the window (or add them via the
 buttons), choose the options, press **Run**. Every run writes its CSVs into a new
-`salt_<date>_<time>` folder inside the chosen output folder (default: the folder of the first
+`basil_<date>_<time>` folder inside the chosen output folder (default: the folder of the first
 input); **Open output folder** opens it.
 
 The table shows one row per source, in input order:
@@ -157,33 +180,45 @@ The table shows one row per source, in input order:
 A click on a row shows the details: **Summary** and **Findings** (every hit with its value, app,
 path, offset). After a run the most relevant source is selected, a red one opens on Findings.
 
-Tables: click a heading to sort (again: reverse), double-click a cell to copy its full value (seeds
-and paths are not shortened), right-click for a copy menu (cell, row tab-separated, context),
-Ctrl+C copies the row. Findings filter: text in any column, kind, checksum ✓ only.
+**Findings** are grouped by source file (**Group by file**, on by default): one row per file with what
+was found in it (e.g. `2 seed ✓ · 140 address`), app and path; open it (▸ or double-click) for the
+single hits with their offsets. The most important files come first. Untick it for a flat list. The
+CSVs are the same either way.
+
+**Export after the scan** (also without `-x`): select findings or file groups (Ctrl / Shift + click:
+several) and press **Export selected files**, or right-click: *Export file(s) (selection)*, *Export all
+files of app …* (the app / container of that finding). The files are copied like with `-x` into
+`files/<label>/` of the run's output folder, with size and SHA-256 appended to `basil_files.csv`;
+files already exported are skipped.
+
+Tables: click a heading to sort (again: reverse; inside the groups too), double-click a cell to copy
+its full value (seeds and paths are not shortened), right-click for a copy menu (cell, row
+tab-separated, context), Ctrl+C copies the row. Findings filter: text in any column, kind, checksum ✓
+only.
 
 Uses tkinter (part of Python; on Debian/Ubuntu `apt install python3-tk`). Drag & drop needs the optional
 package `tkinterdnd2` (`pip install -r requirements.txt`); without it everything else works.
 
 ## Executables
 
-Prebuilt executables are created by the GitHub Action `.github/workflows/salt.yml`:
+Prebuilt executables are created by the GitHub Action `.github/workflows/basil.yml`:
 
 - every push touching `crypto/` (or manual run): download from the workflow run's *Artifacts*
-- tag `salt-v*` (e.g. `git tag salt-v1.0 && git push --tags`): GitHub release "SALT v1.0" with the files
+- tag `basil-v*` (e.g. `git tag basil-v1.0 && git push --tags`): GitHub release "BASIL v1.0" with the files
 
 | File | Platform | |
 |---|---|---|
-| `salt_gui.exe` | Windows | GUI, no console window |
-| `salt.exe` | Windows | CLI (starts the GUI without arguments) |
-| `salt` / `salt-linux` | Linux | GUI without arguments, CLI with arguments |
+| `basil_gui.exe` | Windows | GUI, no console window |
+| `basil.exe` | Windows | CLI (starts the GUI without arguments) |
+| `basil` / `basil-linux` | Linux | GUI without arguments, CLI with arguments |
 
 The action tests every build against the synthetic test data (see Tests) before uploading it.
 
-Version: SALT and SAUCE are versioned independently, each with its own tag prefix (`salt-v…`,
+Version: BASIL and SAUCE are versioned independently, each with its own tag prefix (`basil-v…`,
 `sauce-v…`) and workflow; a tag only builds and releases that tool. The workflow writes the version into
-`VERSION` in `salt.py` before building – tag `salt-v1.0` gives `v1.0`, any other build `dev-<commit>`;
+`VERSION` in `basil.py` before building – tag `basil-v1.0` gives `v1.0`, any other build `dev-<commit>`;
 running from source or a local build shows `dev`. It is shown in the GUI title and header, `--version`,
-the first output line and the `version` / `tool` columns of `salt_summary.csv`.
+the first output line and the `version` / `tool` columns of `basil_summary.csv`.
 
 Local build (PyInstaller cannot cross-compile, build on the target OS):
 `build_exe.bat` (Windows) or `./build_exe.sh` (Linux). Output in `dist/`.
@@ -196,14 +231,17 @@ The Linux binary needs a glibc at least as new as the build system's.
 keychain plist) with **real, valid, randomly generated** seed phrases (BIP39 12/15/18/24 words,
 Electrum) - no wallet behind them - where they turn up in cases: Google Keep, WhatsApp (also a deleted
 message in a free SQLite page), SMS (numbered), Gboard clipboard, `Download/recovery phrase.txt`, JSON
-backup (upper case), Apple Notes (gzip blob in `NoteStore.sqlite`), iMessage, keychain; plus WIF, xprv,
-addresses, wallet apps, an Ethereum keystore file, a seed with a wrong checksum, and negative samples
-that must give no seed (CSS, JS, English text, a word list, repeated words). `--seed N` gives other
+backup (upper case), Apple Notes (gzip blob in `NoteStore.sqlite`), iMessage, keychain, Word (words
+cut into runs), Excel (one word per cell), LibreOffice Writer, `.eml` (quoted-printable with soft line
+breaks inside words, docx attachment in base64), Apple Mail `.emlx` (encoded subject, base64 text,
+quoted-printable HTML), an HTML note (one word per `<div>`); plus WIF, xprv, addresses, wallet apps, an
+Ethereum keystore file, a seed with a wrong checksum, and negative samples that must give no seed (CSS,
+JS, English text, a word list, repeated words, a Word document with prose, a mail with an image). `--seed N` gives other
 seeds, the same N the same data.
 
 ```
 python3 tests/make_test_data.py testdata                 # create (expected.json = what must be found)
-python3 salt.py testdata -r -o testdata/out              # scan
+python3 basil.py testdata -r -o testdata/out              # scan
 python3 tests/make_test_data.py --check testdata/out     # compare: OK / FAIL per finding, ALL OK
 ```
 
@@ -212,12 +250,11 @@ python3 tests/make_test_data.py --check testdata/out     # compare: OK / FAIL pe
 `KNOWN_APPS` (package / bundle id → name), `APP_WORDS` / `APP_IGNORE`, `WALLET_FILE_RE`,
 `SKIP_EXT`, `SCAN_ROOTS` at the top of the script.
 
-## Signature
+## Logo and version
 
-GUI header and window icon (k0 logo), `--version`, the first output line and the `tool` column of
-`salt_summary.csv` show `SALT <version> by kalink0 - https://github.com/kalink0/useful_scripts`
-(constants `AUTHOR`, `HOMEPAGE`, `ICON_PNG`). `salt.ico` is the icon for executables
-(`pyinstaller --icon salt.ico`).
+GUI header and window icon: basil sprig (`ICON_PNG`); `basil.ico` is the icon for executables
+(`pyinstaller --icon basil.ico`). `--version`, the first output line and the `tool` column of
+`basil_summary.csv` show `BASIL <version>` - no author or link, the results are neutral.
 
 ## Wishlist
 
@@ -226,6 +263,10 @@ GUI header and window icon (k0 logo), `--version`, the first output line and the
   down (screenshots - `DCIM/Screenshots`, `Pictures/Screenshots`, iOS `Photos.sqlite` screenshot flag -,
   messenger images, `Download`; no thumbnails / caches / icons), ~0.5–2 s per image and core. OCR
   errors corrected against the BIP39 list (words are unique by their first 4 letters), then the
-  checksum decides. Handwriting is hardly readable for Tesseract.
+  checksum decides. Handwriting is hardly readable for Tesseract. Seed grids (2–3 numbered columns)
+  have to be put back in order by their numbers / word positions (Tesseract `tsv`). First check
+  whether iOS Live Text already stores recognized text in the Photos search databases (`psi.sqlite`).
+- **PDF**: unpack the `FlateDecode` streams (zlib) and search them (text with font-specific encoding
+  stays unreadable).
 - Text disguised by its extension (e.g. a text file named `.jpg`): sniff the first bytes of
   `SKIP_EXT` files and scan them when they are text.

@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------
-# AUTHOR:         kalink0
-# MAIL:           kalinko@be-binary.de
+# AUTHOR:         kalink0 (Marco Neumann)
 # CREATION DATE:  2026-11-25
 #
 # LICENSE:        CC0-1.0
 #
-# SOURCE:         https://github.com/kalink0/useful_scripts
-#
 # TITLE:          build_exe.sh
 #
-# DESCRIPTION:    Build a Linux executable of salt.py - pyinstaller
-#                   dist/salt  (GUI without arguments, CLI with arguments)
+# DESCRIPTION:    Build a Linux executable of basil.py - pyinstaller
+#                   dist/basil  (GUI without arguments, CLI with arguments)
 #
 # KNOWN RESTRICTIONS:
 #                 Python 3.8+ with tkinter (Debian/Ubuntu: apt install python3-tk python3-venv)
@@ -35,7 +32,7 @@ echo "[2/3] Installing / checking PyInstaller..."
 "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pyinstaller -r requirements.txt
 
 echo "[3/3] Building executable..."
-"$VENV_DIR/bin/pyinstaller" --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon salt.ico --name salt salt.py
+"$VENV_DIR/bin/pyinstaller" --noconfirm --clean --onefile --collect-all tkinterdnd2 --icon basil.ico --name basil basil.py
 
 echo
-echo "[OK] Done: $(pwd)/dist/salt"
+echo "[OK] Done: $(pwd)/dist/basil"

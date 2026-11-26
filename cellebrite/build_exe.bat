@@ -2,13 +2,10 @@
 setlocal
 
 :: ------------------------------------------------------------------------------
-:: AUTHOR:         kalink0
-:: MAIL:           kalinko@be-binary.de
+:: AUTHOR:         kalink0 (Marco Neumann)
 :: CREATION DATE:  2026-11-10
 ::
 :: LICENSE:        CC0-1.0
-::
-:: SOURCE:         https://github.com/kalink0/useful_scripts
 ::
 :: TITLE:          build_exe.bat
 ::

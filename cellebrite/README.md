@@ -182,9 +182,9 @@ python3 tests/make_test_ufdrs.py --check testdata/result.csv
 
 The GitHub Action runs the same check against the built executables.
 
-## Signature
+## Logo and version
 
-GUI header and window icon (k0 logo), the HTML report (header, settings, footer), the `tool` column
-of the CSV and `--version` show `SAUCE <version> by kalink0 - https://github.com/kalink0/useful_scripts`
-(constants `AUTHOR`, `HOMEPAGE`, `ICON_PNG`). The executables get the same logo (`sauce.ico`,
-`pyinstaller --icon`). Same look as SALT (`crypto/`), with its own accent color.
+GUI header and window icon (gravy boat) and the HTML report header show the logo (`ICON_PNG`); the
+executables get it too (`sauce.ico`, `pyinstaller --icon`). Same look as BASIL (`crypto/`), with its own
+accent color. The HTML report (settings, footer), the `tool` column of the CSV and `--version` show
+`SAUCE <version>` - no author or link, the results are neutral.
